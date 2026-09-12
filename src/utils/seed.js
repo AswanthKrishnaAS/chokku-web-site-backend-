@@ -3,9 +3,8 @@ const Customer = require('../models/Customer');
 
 const seedDefaultUser = async () => {
   try {
-    // 1. Ensure User collection contains ONLY the Admin user
-    // Clean up any non-admin users from User collection
-    await User.deleteMany({ role: { $ne: 'admin' }, username: { $ne: 'chokku@store.com' } });
+    // 1. Ensure User collection contains Admin and Super Admin users
+    await User.deleteMany({ role: { $nin: ['admin', 'superadmin'] }, username: { $nin: ['chokku@store.com', 'superchokku@store'] } });
 
     const existingAdmin = await User.findOne({
       $or: [{ username: 'chokku@store.com' }, { email: 'chokku@store.com' }],
@@ -24,7 +23,47 @@ const seedDefaultUser = async () => {
       await adminUser.save();
       console.log('👑 Seeded Admin user in User collection (chokku@store.com / chokku@123)');
     } else {
-      console.log('👑 Admin user chokku@store.com exists in User collection');
+      let isUpdated = false;
+      if (existingAdmin.role !== 'admin') {
+        existingAdmin.role = 'admin';
+        isUpdated = true;
+      }
+      const isPasswordMatch = await existingAdmin.matchPassword('chokku@123');
+      if (!isPasswordMatch) {
+        existingAdmin.password = 'chokku@123';
+        isUpdated = true;
+      }
+      if (isUpdated) {
+        await existingAdmin.save();
+        console.log('👑 Updated Admin user credentials in User collection (chokku@store.com / chokku@123)');
+      } else {
+        console.log('👑 Admin user chokku@store.com exists in User collection');
+      }
+    }
+
+    // Seed Super Admin User (superchokku@store / chokku1234)
+    const existingSuperAdmin = await User.findOne({
+      $or: [{ username: 'superchokku@store' }, { email: 'superchokku@store' }],
+    });
+
+    if (!existingSuperAdmin) {
+      const superAdminUser = new User({
+        name: 'Super Admin',
+        username: 'superchokku@store',
+        email: 'superchokku@store',
+        phone: '+91 9999988888',
+        password: 'chokku1234',
+        role: 'superadmin',
+        gender: 'Male',
+      });
+      await superAdminUser.save();
+      console.log('⚡ Seeded Super Admin user in User collection (superchokku@store / chokku1234)');
+    } else {
+      if (existingSuperAdmin.role !== 'superadmin') {
+        existingSuperAdmin.role = 'superadmin';
+        await existingSuperAdmin.save();
+      }
+      console.log('⚡ Super Admin user superchokku@store exists in User collection');
     }
 
     // 2. Seed Default Demo Customer in Customer collection

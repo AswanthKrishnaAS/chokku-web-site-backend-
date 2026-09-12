@@ -236,6 +236,27 @@ const registerUser = async (req, res) => {
     });
 
     if (customer) {
+      try {
+        const ioServer = req.io || req.app.get('io');
+        if (ioServer) {
+          const payload = {
+            id: customer._id,
+            name: customer.name,
+            username: customer.username,
+            email: customer.email,
+            phone: customer.phone,
+            createdAt: customer.createdAt || new Date(),
+          };
+          console.log('📢 Emitting real-time new customer event for:', customer.name);
+          ioServer.emit('admin_new_customer', payload);
+          ioServer.emit('new_customer', payload);
+        } else {
+          console.warn('⚠️ Socket server instance not found on req.io or req.app');
+        }
+      } catch (err) {
+        console.error('Socket emit error on customer registration:', err);
+      }
+
       return res.status(201).json({
         success: true,
         message: 'Customer registered successfully',
@@ -276,8 +297,9 @@ const registerUser = async (req, res) => {
 // @access  Public
 const adminLogin = async (req, res) => {
   try {
-    const { email, username, password } = req.body;
+    const { email, username, password, clientType, platform } = req.body;
     const loginIdentifier = (email || username || '').trim().toLowerCase();
+    const requestedClient = (clientType || platform || req.headers['x-client-platform'] || 'web').trim().toLowerCase();
 
     // Validation
     if (!loginIdentifier || !password) {
@@ -302,7 +324,7 @@ const adminLogin = async (req, res) => {
       });
     }
 
-    // 2. Search ONLY in User collection (Admin)
+    // 2. Search ONLY in User collection (Admin / Super Admin)
     const adminUser = await User.findOne({
       $or: [
         { email: loginIdentifier },
@@ -327,30 +349,61 @@ const adminLogin = async (req, res) => {
       });
     }
 
-    // Verify admin role
-    if (adminUser.role !== 'admin' && adminUser.email !== 'chokku@store.com' && adminUser.username !== 'chokku@store.com') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Admin credentials required.',
+    // Determine account role
+    const isSuperAdmin = adminUser.role === 'superadmin' || adminUser.username === 'superchokku@store' || adminUser.email === 'superchokku@store';
+
+    // Enforce Platform Authorization Rules
+    if (isSuperAdmin) {
+      // Super Admin credentials (superchokku@store) can ONLY be used in the mobile app
+      if (requestedClient !== 'mobile') {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Super Admin credentials can only be used in the mobile app.',
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Super Admin mobile login successful',
+        token: generateToken(adminUser._id),
+        user: {
+          id: adminUser._id,
+          name: adminUser.name,
+          username: adminUser.username,
+          gender: adminUser.gender,
+          phone: adminUser.phone,
+          email: adminUser.email,
+          avatarUrl: adminUser.avatarUrl,
+          role: 'SUPER_ADMIN',
+          platform: 'mobile',
+        },
+      });
+    } else {
+      // Admin credentials (chokku@store.com) can ONLY be used in the web dashboard
+      if (requestedClient === 'mobile') {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Admin credentials can only be used in the web dashboard.',
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Admin web login successful',
+        token: generateToken(adminUser._id),
+        user: {
+          id: adminUser._id,
+          name: adminUser.name,
+          username: adminUser.username,
+          gender: adminUser.gender,
+          phone: adminUser.phone,
+          email: adminUser.email,
+          avatarUrl: adminUser.avatarUrl,
+          role: adminUser.role || 'admin',
+          platform: 'web',
+        },
       });
     }
-
-    // Successful admin login response
-    return res.status(200).json({
-      success: true,
-      message: 'Admin login successful',
-      token: generateToken(adminUser._id),
-      user: {
-        id: adminUser._id,
-        name: adminUser.name,
-        username: adminUser.username,
-        gender: adminUser.gender,
-        phone: adminUser.phone,
-        email: adminUser.email,
-        avatarUrl: adminUser.avatarUrl,
-        role: 'admin',
-      },
-    });
   } catch (error) {
     console.error('Admin login error:', error);
     return res.status(500).json({
@@ -407,21 +460,32 @@ const getSavedAddresses = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
-    if ((!customer.addresses || customer.addresses.length === 0) && (customer.address || customer.name)) {
+    const hasValidLegacyAddress = Boolean(
+      customer.address && customer.address.trim() !== '' &&
+      customer.city && customer.city.trim() !== '' &&
+      customer.pincode && customer.pincode.trim() !== '' &&
+      customer.phone && customer.phone.trim() !== ''
+    );
+
+    if ((!customer.addresses || customer.addresses.length === 0) && hasValidLegacyAddress) {
       customer.addresses = [
         {
           label: 'Primary Address',
           isPrimary: true,
           fullName: customer.name || 'Customer',
           email: customer.email || '',
-          phone: customer.phone || '',
-          address: customer.address || '',
-          city: customer.city || '',
-          state: customer.state || '',
-          pincode: customer.pincode || '',
+          phone: customer.phone.trim(),
+          address: customer.address.trim(),
+          city: customer.city.trim(),
+          state: customer.state ? customer.state.trim() : '',
+          pincode: customer.pincode.trim(),
         },
       ];
-      await customer.save();
+      try {
+        await customer.save();
+      } catch (saveErr) {
+        console.error('Error auto-migrating legacy address:', saveErr);
+      }
     }
 
     return res.status(200).json({
