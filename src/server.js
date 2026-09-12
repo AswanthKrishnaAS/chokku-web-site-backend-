@@ -13,6 +13,7 @@ const websiteSettingsRoutes = require('./routes/websiteSettingsRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const productRoutes = require('./routes/productRoutes');
 const catchGameRoutes = require('./routes/catchGameRoutes');
+const orderRoutes = require('./routes/orderRoutes');
 const http = require('http');
 const { Server } = require('socket.io');
 const seedDefaultUser = require('./utils/seed');
@@ -74,6 +75,7 @@ app.use('/api/website-settings', websiteSettingsRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/catch-game', catchGameRoutes);
+app.use('/api/orders', orderRoutes);
 app.use('/api', authRoutes);
 
 // Health check endpoint

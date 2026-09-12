@@ -52,6 +52,19 @@ const customerSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    addresses: [
+      {
+        label: { type: String, default: 'Primary Address' },
+        isPrimary: { type: Boolean, default: false },
+        fullName: { type: String, required: true },
+        email: { type: String, default: '' },
+        phone: { type: String, required: true },
+        address: { type: String, required: true },
+        city: { type: String, required: true },
+        state: { type: String, default: '' },
+        pincode: { type: String, required: true },
+      },
+    ],
     avatarUrl: {
       type: String,
       default: '',
