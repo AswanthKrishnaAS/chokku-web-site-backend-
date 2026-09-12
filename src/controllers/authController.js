@@ -180,41 +180,47 @@ const loginUser = async (req, res) => {
 // @access  Public
 const registerUser = async (req, res) => {
   try {
-    const { name, phone, gender, username, password } = req.body;
+    const { name, phone, gender, email, username, password } = req.body;
+
+    const userEmail = (email || username || '').trim().toLowerCase();
+    const userUsername = (username || email || '').trim().toLowerCase();
 
     // Basic Validation
-    if (!name || !phone || !username || !password) {
+    if (!name || !phone || !userEmail || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide Name, Mobile Number, Username, and Password',
+        message: 'Please provide Name, Mobile Number, Email Address, and Password',
       });
     }
 
-    const cleanUsername = username.trim().toLowerCase();
     const cleanPhone = phone.trim();
 
     // Prevent using Admin reserved username/email
-    if (cleanUsername === 'chokku@store.com' || cleanUsername === 'chokku admin') {
+    if (userEmail === 'chokku@store.com' || userEmail === 'chokku admin') {
       return res.status(400).json({
         success: false,
-        message: 'This username is reserved for Admin. Please choose another.',
+        message: 'This email address is reserved for Admin. Please choose another.',
       });
     }
 
-    const adminExists = await User.findOne({ username: cleanUsername });
+    const adminExists = await User.findOne({
+      $or: [{ username: userEmail }, { email: userEmail }],
+    });
     if (adminExists) {
       return res.status(400).json({
         success: false,
-        message: 'This username is reserved for Admin. Please choose another.',
+        message: 'This email address is reserved for Admin. Please choose another.',
       });
     }
 
-    // Check if username already exists in Customer collection
-    const customerExists = await Customer.findOne({ username: cleanUsername });
+    // Check if email or username already exists in Customer collection
+    const customerExists = await Customer.findOne({
+      $or: [{ email: userEmail }, { username: userUsername }],
+    });
     if (customerExists) {
       return res.status(400).json({
         success: false,
-        message: 'This Username is already taken. Please choose another.',
+        message: 'An account with this Email Address already exists. Please Sign In.',
       });
     }
 
@@ -223,7 +229,8 @@ const registerUser = async (req, res) => {
       name: name.trim(),
       phone: cleanPhone,
       gender: gender || 'Male',
-      username: cleanUsername,
+      email: userEmail,
+      username: userUsername || userEmail,
       password,
       role: 'customer',
     });
@@ -368,7 +375,7 @@ const getCustomers = async (req, res) => {
         name: c.name,
         username: c.username,
         phone: c.phone,
-        email: c.email || `${c.username}@chokku.store`,
+        email: c.email || '',
         gender: c.gender || 'Male',
         role: c.role || 'customer',
         date: c.createdAt ? new Date(c.createdAt).toISOString().split('T')[0] : '2026-08-01',
@@ -385,6 +392,158 @@ const getCustomers = async (req, res) => {
   }
 };
 
+// @desc    Get Saved Addresses for Logged-In Customer
+// @route   GET /api/auth/addresses
+// @access  Private / Customer
+const getSavedAddresses = async (req, res) => {
+  try {
+    const customerId = req.customer?._id || req.query.customerId;
+    if (!customerId) {
+      return res.status(400).json({ success: false, message: 'Customer ID required' });
+    }
+
+    const customer = await Customer.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+
+    if ((!customer.addresses || customer.addresses.length === 0) && (customer.address || customer.name)) {
+      customer.addresses = [
+        {
+          label: 'Primary Address',
+          isPrimary: true,
+          fullName: customer.name || 'Customer',
+          email: customer.email || '',
+          phone: customer.phone || '',
+          address: customer.address || '',
+          city: customer.city || '',
+          state: customer.state || '',
+          pincode: customer.pincode || '',
+        },
+      ];
+      await customer.save();
+    }
+
+    return res.status(200).json({
+      success: true,
+      count: customer.addresses?.length || 0,
+      addresses: customer.addresses || [],
+    });
+  } catch (error) {
+    console.error('Get saved addresses error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch saved addresses' });
+  }
+};
+
+// @desc    Add Saved Address for Logged-In Customer (Max 3 Addresses)
+// @route   POST /api/auth/addresses
+// @access  Private / Customer
+const addSavedAddress = async (req, res) => {
+  try {
+    const customerId = req.customer?._id || req.body.customerId;
+    const { fullName, email, phone, address, city, state, pincode, label } = req.body;
+
+    if (!fullName || !phone || !address || !city || !pincode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Full Name, Phone, Address, City, and Pincode are required',
+      });
+    }
+
+    const customer = await Customer.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+
+    if (!customer.addresses) customer.addresses = [];
+
+    if (customer.addresses.length >= 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'Maximum 3 saved addresses limit reached. Please delete an address before adding a new one.',
+      });
+    }
+
+    const isFirst = customer.addresses.length === 0;
+    const addressLabel = label || (isFirst ? 'Primary Address' : `Address ${customer.addresses.length + 1}`);
+
+    const newAddressObj = {
+      label: addressLabel,
+      isPrimary: isFirst,
+      fullName,
+      email: email || customer.email || '',
+      phone,
+      address,
+      city,
+      state: state || '',
+      pincode,
+    };
+
+    customer.addresses.push(newAddressObj);
+
+    if (isFirst || !customer.address) {
+      customer.address = address;
+      customer.city = city;
+      customer.state = state || '';
+      customer.pincode = pincode;
+      if (email && !customer.email) customer.email = email;
+    }
+
+    await customer.save();
+
+    return res.status(201).json({
+      success: true,
+      message: 'Address saved successfully to Customer profile',
+      addresses: customer.addresses,
+      addedAddress: customer.addresses[customer.addresses.length - 1],
+    });
+  } catch (error) {
+    console.error('Add saved address error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to save address' });
+  }
+};
+
+// @desc    Delete Saved Address for Customer
+// @route   DELETE /api/auth/addresses/:addressId
+// @access  Private / Customer
+const deleteSavedAddress = async (req, res) => {
+  try {
+    const customerId = req.customer?._id || req.body.customerId || req.query.customerId;
+    const { addressId } = req.params;
+
+    const customer = await Customer.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+
+    if (!customer.addresses) customer.addresses = [];
+
+    const initialLen = customer.addresses.length;
+    customer.addresses = customer.addresses.filter((a) => a._id.toString() !== addressId && a.id !== addressId);
+
+    if (customer.addresses.length === initialLen) {
+      return res.status(404).json({ success: false, message: 'Address not found' });
+    }
+
+    customer.addresses = customer.addresses.map((a, idx) => ({
+      ...a.toObject(),
+      isPrimary: idx === 0,
+      label: idx === 0 ? 'Primary Address' : `Address ${idx + 1}`,
+    }));
+
+    await customer.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Address deleted successfully',
+      addresses: customer.addresses,
+    });
+  } catch (error) {
+    console.error('Delete saved address error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to delete address' });
+  }
+};
+
 module.exports = {
   sendOtp,
   verifyOtp,
@@ -392,4 +551,7 @@ module.exports = {
   registerUser,
   adminLogin,
   getCustomers,
+  getSavedAddresses,
+  addSavedAddress,
+  deleteSavedAddress,
 };
