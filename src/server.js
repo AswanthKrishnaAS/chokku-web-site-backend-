@@ -38,10 +38,11 @@ io.on('connection', (socket) => {
     io.emit('admin_new_order', order);
   });
 
-  // Relay customer registration notifications to admin
+  // Relay customer registration notifications to admin and mobile app listeners
   socket.on('new_customer', (customer) => {
     console.log('👤 Real-time new customer event:', customer.name || customer.username);
     io.emit('admin_new_customer', customer);
+    io.emit('new_customer', customer);
   });
 
   // Relay order status changes
@@ -61,6 +62,12 @@ app.set('io', io);
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
+
+// Attach io instance to every express request
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
 
 // Middleware
 app.use(cors());

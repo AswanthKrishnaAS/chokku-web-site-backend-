@@ -520,7 +520,9 @@ const updateOrderStatus = async (req, res) => {
 
     const io = req.app.get('io');
     if (io) {
-      io.emit('customer_order_status_update', { orderId: order.orderCustomId, status });
+      const payload = { orderId: order.orderCustomId, _id: order._id, status };
+      io.emit('customer_order_status_update', payload);
+      io.emit('admin_order_status_update', payload);
     }
 
     res.status(200).json({
