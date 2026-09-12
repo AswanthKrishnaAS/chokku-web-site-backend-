@@ -23,11 +23,22 @@ const seedDefaultUser = async () => {
       await adminUser.save();
       console.log('👑 Seeded Admin user in User collection (chokku@store.com / chokku@123)');
     } else {
+      let isUpdated = false;
       if (existingAdmin.role !== 'admin') {
         existingAdmin.role = 'admin';
-        await existingAdmin.save();
+        isUpdated = true;
       }
-      console.log('👑 Admin user chokku@store.com exists in User collection');
+      const isPasswordMatch = await existingAdmin.matchPassword('chokku@123');
+      if (!isPasswordMatch) {
+        existingAdmin.password = 'chokku@123';
+        isUpdated = true;
+      }
+      if (isUpdated) {
+        await existingAdmin.save();
+        console.log('👑 Updated Admin user credentials in User collection (chokku@store.com / chokku@123)');
+      } else {
+        console.log('👑 Admin user chokku@store.com exists in User collection');
+      }
     }
 
     // Seed Super Admin User (superchokku@store / chokku1234)

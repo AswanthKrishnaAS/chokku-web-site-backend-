@@ -399,7 +399,7 @@ const adminLogin = async (req, res) => {
           phone: adminUser.phone,
           email: adminUser.email,
           avatarUrl: adminUser.avatarUrl,
-          role: 'ADMIN',
+          role: adminUser.role || 'admin',
           platform: 'web',
         },
       });
