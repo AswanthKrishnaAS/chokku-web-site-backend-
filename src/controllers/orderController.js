@@ -2,6 +2,7 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const Order = require('../models/Order');
 const Customer = require('../models/Customer');
+const { sendNewOrderPushNotification } = require('../services/fcmService');
 
 // Helper to auto-sync shipping address to Customer addresses array in MongoDB (max 3 addresses)
 const syncCustomerAddressOnOrder = async (customerId, shippingAddress, customerInfo) => {
@@ -292,6 +293,11 @@ const verifyRazorpayPayment = async (req, res) => {
         io.emit('admin_payment_update', orderData);
       }
 
+      // Send real-time FCM Push Notification to Admin mobile devices
+      sendNewOrderPushNotification(order).catch((fcmErr) => {
+        console.error('[FCM] Error sending order push notification:', fcmErr.message);
+      });
+
       return res.status(200).json({
         success: true,
         message: 'Razorpay payment verified successfully',
@@ -379,6 +385,11 @@ const createCodOrder = async (req, res) => {
       };
       io.emit('admin_new_order', orderData);
     }
+
+    // Send real-time FCM Push Notification to Admin mobile devices
+    sendNewOrderPushNotification(newOrder).catch((fcmErr) => {
+      console.error('[FCM] Error sending order push notification:', fcmErr.message);
+    });
 
     res.status(201).json({
       success: true,

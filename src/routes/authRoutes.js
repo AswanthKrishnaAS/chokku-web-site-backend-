@@ -25,6 +25,16 @@ router.post('/login', loginUser);
 // POST /register
 router.post('/register', registerUser);
 
+// POST /test-fcm-notification
+const { testFcmNotification, registerFcmToken } = require('../controllers/authController');
+router.post('/test-fcm-notification', testFcmNotification);
+
+// POST /register-fcm-token
+router.post('/register-fcm-token', registerFcmToken);
+
+// POST /register-device
+router.post('/register-device', registerFcmToken);
+
 // POST /admin-login
 router.post('/admin-login', adminLogin);
 

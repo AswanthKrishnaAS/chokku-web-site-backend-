@@ -78,6 +78,7 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/notifications', authRoutes);
 app.use('/api/website-settings', websiteSettingsRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/products', productRoutes);
@@ -112,9 +113,9 @@ const startServer = async () => {
   await connectDB();
   await seedDefaultUser();
 
-  server.listen(PORT, () => {
-    console.log(`🚀 WebSocket & Express server running on port ${PORT}`);
-    console.log(`🔑 Auth endpoints: http://localhost:${PORT}/api/auth/login & http://localhost:${PORT}/api/auth/register`);
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 WebSocket & Express server running on port ${PORT} (0.0.0.0)`);
+    console.log(`🔑 Auth endpoints: http://localhost:${PORT}/api/auth/login & http://10.0.2.2:${PORT}/api/auth/register`);
   });
 };
 

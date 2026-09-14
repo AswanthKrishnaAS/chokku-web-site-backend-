@@ -1,6 +1,8 @@
 const User = require('../models/User');
 const Customer = require('../models/Customer');
+const AdminFcmToken = require('../models/AdminFcmToken');
 const jwt = require('jsonwebtoken');
+const { sendNewCustomerPushNotification } = require('../services/fcmService');
 
 // Generate JWT token helper
 const generateToken = (id) => {
@@ -236,26 +238,32 @@ const registerUser = async (req, res) => {
     });
 
     if (customer) {
+      console.log(`[AUTH] Customer created successfully: ${customer.name}`);
+
+      const payload = {
+        id: customer._id,
+        name: customer.name,
+        username: customer.username,
+        email: customer.email,
+        phone: customer.phone,
+        createdAt: customer.createdAt || new Date(),
+      };
+
       try {
         const ioServer = req.io || req.app.get('io');
         if (ioServer) {
-          const payload = {
-            id: customer._id,
-            name: customer.name,
-            username: customer.username,
-            email: customer.email,
-            phone: customer.phone,
-            createdAt: customer.createdAt || new Date(),
-          };
-          console.log('📢 Emitting real-time new customer event for:', customer.name);
+          console.log('📢 Emitting real-time new customer socket event for:', customer.name);
           ioServer.emit('admin_new_customer', payload);
           ioServer.emit('new_customer', payload);
-        } else {
-          console.warn('⚠️ Socket server instance not found on req.io or req.app');
         }
       } catch (err) {
         console.error('Socket emit error on customer registration:', err);
       }
+
+      // Send Firebase Cloud Messaging (FCM) Push Notification to mobile app (works even when app is closed)
+      sendNewCustomerPushNotification(customer.name, payload).catch((fcmErr) => {
+        console.error('[FCM] Error sending push notification:', fcmErr.message);
+      });
 
       return res.status(201).json({
         success: true,
@@ -352,58 +360,22 @@ const adminLogin = async (req, res) => {
     // Determine account role
     const isSuperAdmin = adminUser.role === 'superadmin' || adminUser.username === 'superchokku@store' || adminUser.email === 'superchokku@store';
 
-    // Enforce Platform Authorization Rules
-    if (isSuperAdmin) {
-      // Super Admin credentials (superchokku@store) can ONLY be used in the mobile app
-      if (requestedClient !== 'mobile') {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied. Super Admin credentials can only be used in the mobile app.',
-        });
-      }
-
-      return res.status(200).json({
-        success: true,
-        message: 'Super Admin mobile login successful',
-        token: generateToken(adminUser._id),
-        user: {
-          id: adminUser._id,
-          name: adminUser.name,
-          username: adminUser.username,
-          gender: adminUser.gender,
-          phone: adminUser.phone,
-          email: adminUser.email,
-          avatarUrl: adminUser.avatarUrl,
-          role: 'SUPER_ADMIN',
-          platform: 'mobile',
-        },
-      });
-    } else {
-      // Admin credentials (chokku@store.com) can ONLY be used in the web dashboard
-      if (requestedClient === 'mobile') {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied. Admin credentials can only be used in the web dashboard.',
-        });
-      }
-
-      return res.status(200).json({
-        success: true,
-        message: 'Admin web login successful',
-        token: generateToken(adminUser._id),
-        user: {
-          id: adminUser._id,
-          name: adminUser.name,
-          username: adminUser.username,
-          gender: adminUser.gender,
-          phone: adminUser.phone,
-          email: adminUser.email,
-          avatarUrl: adminUser.avatarUrl,
-          role: adminUser.role || 'admin',
-          platform: 'web',
-        },
-      });
-    }
+    return res.status(200).json({
+      success: true,
+      message: isSuperAdmin ? 'Super Admin login successful' : 'Admin login successful',
+      token: generateToken(adminUser._id),
+      user: {
+        id: adminUser._id,
+        name: adminUser.name,
+        username: adminUser.username,
+        gender: adminUser.gender,
+        phone: adminUser.phone,
+        email: adminUser.email,
+        avatarUrl: adminUser.avatarUrl,
+        role: isSuperAdmin ? 'SUPER_ADMIN' : (adminUser.role || 'admin'),
+        platform: requestedClient,
+      },
+    });
   } catch (error) {
     console.error('Admin login error:', error);
     return res.status(500).json({
@@ -608,6 +580,78 @@ const deleteSavedAddress = async (req, res) => {
   }
 };
 
+// @desc    Test trigger for FCM Push Notification
+// @route   POST /api/auth/test-fcm-notification
+// @access  Public
+const testFcmNotification = async (req, res) => {
+  try {
+    const { name } = req.body;
+    const testName = name || 'Demo Website Customer';
+    const result = await sendNewCustomerPushNotification(testName, {
+      id: 'test_' + Date.now(),
+      name: testName,
+      email: 'test@chokkustore.com',
+      phone: '9876543210',
+    });
+    return res.status(200).json({
+      success: true,
+      message: `Test FCM push notification triggered for "${testName}"`,
+      result,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// @desc    Register or update Admin FCM Device Token in database
+// @route   POST /api/auth/register-fcm-token OR POST /api/notifications/register-device
+// @access  Public / Admin
+const registerFcmToken = async (req, res) => {
+  try {
+    const { token, deviceId, platform, adminUsername, username, userId, adminId } = req.body;
+    const reqPlatform = platform || 'android';
+
+    console.log('[FCM] Token registration request received');
+
+    if (!token || !token.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'FCM device token is required',
+      });
+    }
+
+    const cleanToken = token.trim();
+    const targetUser = adminUsername || username || userId || adminId || (req.user ? req.user.username || req.user.email || req.user._id : '');
+
+    console.log(`[FCM] Registering token for user: "${targetUser || 'Admin Device'}"...`);
+
+    const fcmDoc = await AdminFcmToken.registerOrUpdateToken({
+      token: cleanToken,
+      deviceId: deviceId || 'flutter_admin_device',
+      platform: reqPlatform,
+      adminUsername: targetUser,
+    });
+
+    const activeCount = await AdminFcmToken.countDocuments({ active: true });
+    console.log(`[FCM] Device token registered successfully (ID: ${fcmDoc._id}, active: ${fcmDoc.active})`);
+    console.log(`[FCM] Total active tokens in database: ${activeCount}`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'FCM device token registered successfully',
+      activeTokensCount: activeCount,
+      token: fcmDoc,
+    });
+  } catch (error) {
+    console.error('[FCM] Register FCM token error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to register FCM token',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   sendOtp,
   verifyOtp,
@@ -618,4 +662,6 @@ module.exports = {
   getSavedAddresses,
   addSavedAddress,
   deleteSavedAddress,
+  testFcmNotification,
+  registerFcmToken,
 };
