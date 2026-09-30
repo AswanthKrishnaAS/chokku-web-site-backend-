@@ -59,6 +59,15 @@ router.post('/', async (req, res) => {
       isNewArrival,
       isBestSeller,
       tags,
+      tryOn,
+      tryOnEnabled,
+      tryOnImages,
+      tryOnImage,
+      tryOnType,
+      tryOnCategory,
+      tryOnSize,
+      tryOnScale,
+      tryOnConfig,
     } = req.body;
 
     if (!name || price === undefined) {
@@ -68,11 +77,33 @@ router.post('/', async (req, res) => {
       });
     }
 
+    const isTryOnActive = Boolean(tryOnEnabled !== undefined ? tryOnEnabled : tryOn);
+    const mainTryOnImg = tryOnImage || (Array.isArray(tryOnImages) && tryOnImages[0]) || null;
+    const tryOnImgList = Array.isArray(tryOnImages) && tryOnImages.length > 0 ? tryOnImages : (mainTryOnImg ? [mainTryOnImg] : []);
+
+    if (isTryOnActive && !mainTryOnImg && tryOnImgList.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload a Try-On image.',
+      });
+    }
+
     const productId = id || 'prod-' + Date.now();
     const productSlug = slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const sellingPrice = Number(price) || 0;
     const mrpPrice = Number(originalPrice) || sellingPrice;
     const calcDiscount = mrpPrice > sellingPrice ? Math.round(((mrpPrice - sellingPrice) / mrpPrice) * 100) : 0;
+
+    const catType = tryOnCategory || tryOnType || 'Earrings';
+    const validatedTryOnSize = ['Small', 'Medium', 'Large'].includes(tryOnSize) ? tryOnSize : 'Medium';
+    const calcScale = tryOnScale !== undefined ? Number(tryOnScale) : (validatedTryOnSize === 'Small' ? 0.75 : validatedTryOnSize === 'Large' ? 1.35 : 1.0);
+
+    const configData = tryOnConfig || {
+      offsetX: 0,
+      offsetY: 0,
+      scale: calcScale,
+      rotationOffset: 0,
+    };
 
     let product = await Product.findOne({ id: productId });
     if (product) {
@@ -93,6 +124,15 @@ router.post('/', async (req, res) => {
       product.isNewArrival = Boolean(isNewArrival);
       product.isBestSeller = Boolean(isBestSeller);
       product.tags = Array.isArray(tags) ? tags : product.tags || [];
+      product.tryOn = isTryOnActive;
+      product.tryOnEnabled = isTryOnActive;
+      product.tryOnImages = tryOnImgList;
+      product.tryOnImage = mainTryOnImg;
+      product.tryOnType = catType;
+      product.tryOnCategory = catType;
+      product.tryOnSize = validatedTryOnSize;
+      product.tryOnScale = calcScale;
+      product.tryOnConfig = configData;
       await product.save();
     } else {
       product = await Product.create({
@@ -116,6 +156,15 @@ router.post('/', async (req, res) => {
         isNewArrival: Boolean(isNewArrival),
         isBestSeller: Boolean(isBestSeller),
         tags: Array.isArray(tags) ? tags : [],
+        tryOn: isTryOnActive,
+        tryOnEnabled: isTryOnActive,
+        tryOnImages: tryOnImgList,
+        tryOnImage: mainTryOnImg,
+        tryOnType: catType,
+        tryOnCategory: catType,
+        tryOnSize: validatedTryOnSize,
+        tryOnScale: calcScale,
+        tryOnConfig: configData,
       });
     }
 
@@ -135,6 +184,19 @@ router.post('/', async (req, res) => {
       error: error.message,
     });
   }
+});
+
+const pngUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const isPng = file.mimetype === 'image/png' || file.originalname.toLowerCase().endsWith('.png');
+    if (isPng) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PNG images (.png) are allowed for Try On!'), false);
+    }
+  },
 });
 
 // POST /api/products/upload-images - Upload Up To 7 Product Images via Multer
@@ -178,6 +240,53 @@ router.post('/upload-images', (req, res) => {
       return res.status(500).json({
         success: false,
         message: 'Server error during product images upload',
+        error: error.message,
+      });
+    }
+  });
+});
+
+// POST /api/products/upload-tryon-images - Upload Up To 5 Try On PNG Images via Multer
+router.post('/upload-tryon-images', (req, res) => {
+  const uploadArray = pngUpload.array('tryOnImages', 5);
+
+  uploadArray(req, res, async (err) => {
+    if (err instanceof multer.MulterError) {
+      return res.status(400).json({
+        success: false,
+        message: `Multer upload error: ${err.message}`,
+      });
+    } else if (err) {
+      return res.status(400).json({
+        success: false,
+        message: err.message || 'File upload failed',
+      });
+    }
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No PNG image files provided for Try On upload',
+      });
+    }
+
+    try {
+      const uploadedUrls = [];
+      for (const file of req.files) {
+        const imageUrl = await uploadToBucketOrLocal(file, 'tryon');
+        uploadedUrls.push(imageUrl);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `${uploadedUrls.length} Try On PNG image(s) uploaded successfully`,
+        imageUrls: uploadedUrls,
+      });
+    } catch (error) {
+      console.error('Error uploading Try On images:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Server error during Try On images upload',
         error: error.message,
       });
     }

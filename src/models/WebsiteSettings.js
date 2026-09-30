@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const homeSliderSchema = new mongoose.Schema({
   id: { type: String, required: true },
   image: { type: String, default: '' },
+  desktopImage: { type: String, default: '' },
+  mobileImage: { type: String, default: '' },
   metaTag: { type: String, default: 'SPECIAL OFFER' },
   heading: { type: String, default: 'SHOP. PLAY. EARN REWARDS!' },
   subheading: { type: String, default: 'Shop your favorites, play fun games and earn exciting rewards every day!' },

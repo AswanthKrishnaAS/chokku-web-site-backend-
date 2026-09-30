@@ -85,6 +85,51 @@ const productSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    // Standard TryOn Fields
+    tryOn: {
+      type: Boolean,
+      default: false,
+    },
+    tryOnEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    tryOnImages: {
+      type: [String],
+      default: [],
+    },
+    tryOnImage: {
+      type: String,
+      default: null,
+    },
+    tryOnType: {
+      type: String,
+      enum: [
+        'Earrings', 'Glasses', 'Necklace', 'Chain', 'Ring', 
+        'Bracelet', 'Hand chain', 'Bangle', 'Dress', 'Shirt', 
+        'Top', 'Bottom', 'Shoes', 'Bags', 'Hats', 'Other'
+      ],
+      default: 'Earrings',
+    },
+    tryOnCategory: {
+      type: String,
+      default: null,
+    },
+    tryOnSize: {
+      type: String,
+      enum: ['Small', 'Medium', 'Large'],
+      default: 'Medium',
+    },
+    tryOnScale: {
+      type: Number,
+      default: 1.0,
+    },
+    tryOnConfig: {
+      offsetX: { type: Number, default: 0 },
+      offsetY: { type: Number, default: 0 },
+      scale: { type: Number, default: 1 },
+      rotationOffset: { type: Number, default: 0 },
+    },
   },
   {
     timestamps: true,
