@@ -290,6 +290,7 @@ const verifyRazorpayPayment = async (req, res) => {
           razorpaySignature: order.razorpaySignature,
         };
         io.emit('admin_new_order', orderData);
+        io.emit('new_order', orderData);
         io.emit('admin_payment_update', orderData);
       }
 
@@ -384,6 +385,7 @@ const createCodOrder = async (req, res) => {
         estimatedDelivery: newOrder.estimatedDelivery,
       };
       io.emit('admin_new_order', orderData);
+      io.emit('new_order', orderData);
     }
 
     // Send real-time FCM Push Notification to Admin mobile devices
