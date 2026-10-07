@@ -1,18 +1,5 @@
 const mongoose = require('mongoose');
 
-const homeSliderSchema = new mongoose.Schema({
-  id: { type: String, required: true },
-  image: { type: String, default: '' },
-  desktopImage: { type: String, default: '' },
-  mobileImage: { type: String, default: '' },
-  metaTag: { type: String, default: 'SPECIAL OFFER' },
-  heading: { type: String, default: 'SHOP. PLAY. EARN REWARDS!' },
-  subheading: { type: String, default: 'Shop your favorites, play fun games and earn exciting rewards every day!' },
-  buttonText: { type: String, default: 'Shop Now' },
-  buttonLink: { type: String, default: '/shop' },
-  status: { type: String, enum: ['Active', 'Inactive'], default: 'Active' },
-});
-
 const websiteSettingsSchema = new mongoose.Schema(
   {
     key: {
@@ -39,10 +26,6 @@ const websiteSettingsSchema = new mongoose.Schema(
     categorySectionDescription: {
       type: String,
       default: 'Discover our curated range of premium products',
-    },
-    homeSliders: {
-      type: [homeSliderSchema],
-      default: [],
     },
   },
   {
