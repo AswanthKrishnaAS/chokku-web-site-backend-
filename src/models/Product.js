@@ -1,5 +1,19 @@
 const mongoose = require('mongoose');
 
+const reviewSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    customerName: { type: String, required: true, default: 'Customer' },
+    profileImage: { type: String, default: '' },
+    rating: { type: Number, required: true, min: 1, max: 5, default: 5 },
+    comment: { type: String, default: '' },
+    date: { type: String, default: () => new Date().toISOString().split('T')[0] },
+    image: { type: String, default: '' },
+    images: { type: [String], default: [] },
+  },
+  { _id: false, timestamps: true }
+);
+
 const productSchema = new mongoose.Schema(
   {
     id: {
@@ -48,6 +62,10 @@ const productSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    reviews: {
+      type: [reviewSchema],
+      default: [],
+    },
     image: {
       type: String,
       default: '',
@@ -64,10 +82,38 @@ const productSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-    specifications: {
-      type: Map,
-      of: String,
-      default: {},
+    highlights: {
+      type: [String],
+      default: [],
+    },
+    additionalDetails: {
+      type: String,
+      default: '',
+    },
+    moreInformation: {
+      manufacturer: { type: String, default: '' },
+      importer: { type: String, default: '' },
+      packer: { type: String, default: '' },
+      netWeight: { type: String, default: '' },
+    },
+    sizes: {
+      type: [String],
+      default: [],
+    },
+    sizeVariants: {
+      type: [
+        {
+          size: { type: String, required: true },
+          price: { type: Number, required: true },
+          originalPrice: { type: Number, default: 0 },
+          isAvailable: { type: Boolean, default: true },
+        },
+      ],
+      default: [],
+    },
+    isAddPriceEnabled: {
+      type: Boolean,
+      default: false,
     },
     isFeatured: {
       type: Boolean,
