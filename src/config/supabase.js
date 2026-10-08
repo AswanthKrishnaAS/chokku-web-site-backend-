@@ -131,7 +131,8 @@ const uploadToBucketOrLocal = async (file, targetBucket = 'website-assets') => {
 
   // Return public URL relative to server static /uploads
   const port = process.env.PORT || 5000;
-  return `http://localhost:${port}/uploads/${fileName}`;
+  const baseUrl = (process.env.BACKEND_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`).replace(/\/+$/, '');
+  return `${baseUrl}/uploads/${fileName}`;
 };
 
 
