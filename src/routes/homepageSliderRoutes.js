@@ -185,6 +185,14 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const isMongoId = Boolean(id && id.length === 24 && /^[0-9a-fA-F]{24}$/.test(id));
+    if (!isMongoId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid homepage slider banner ID format',
+      });
+    }
+
     const {
       desktopImage,
       mobileImage,
@@ -251,6 +259,14 @@ router.put('/:id', async (req, res) => {
 router.patch('/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
+    const isMongoId = Boolean(id && id.length === 24 && /^[0-9a-fA-F]{24}$/.test(id));
+    if (!isMongoId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid homepage slider banner ID format',
+      });
+    }
+
     const { status } = req.body;
 
     const slide = await HomepageSlider.findById(id);
@@ -283,6 +299,14 @@ router.patch('/:id/status', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const isMongoId = Boolean(id && id.length === 24 && /^[0-9a-fA-F]{24}$/.test(id));
+    if (!isMongoId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid homepage slider banner ID format',
+      });
+    }
+
     const deleted = await HomepageSlider.findByIdAndDelete(id);
 
     if (!deleted) {
@@ -307,3 +331,4 @@ router.delete('/:id', async (req, res) => {
 });
 
 module.exports = router;
+

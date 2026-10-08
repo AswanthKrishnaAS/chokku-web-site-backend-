@@ -100,6 +100,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// JSON 404 handler for unknown /api endpoints
+app.use('/api/*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `API endpoint ${req.originalUrl} not found`,
+  });
+});
+
 // JSON Syntax & Body Parser Error Handler Middleware
 app.use((err, req, res, next) => {
   if (err.type === 'entity.too.large' || err.status === 413) {
