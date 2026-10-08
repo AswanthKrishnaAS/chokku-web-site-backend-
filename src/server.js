@@ -72,14 +72,20 @@ app.use((req, res, next) => {
 });
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'Accept', 'Origin'],
+  credentials: true,
+}));
+app.options('*', cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Serve static uploads folder for local file fallback
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// Routes
+// Routes with /api prefix
 app.use('/api/auth', authRoutes);
 app.use('/api/notifications', authRoutes);
 app.use('/api/website-settings', websiteSettingsRoutes);
@@ -91,8 +97,19 @@ app.use('/api/catch-game', catchGameRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api', authRoutes);
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
+// Non-/api route aliases to guarantee requests without /api prefix work cleanly
+app.use('/auth', authRoutes);
+app.use('/notifications', authRoutes);
+app.use('/website-settings', websiteSettingsRoutes);
+app.use('/homepage-sliders', homepageSliderRoutes);
+app.use('/categories', categoryRoutes);
+app.use('/products', productRoutes);
+app.use('/try-on', tryOnRoutes);
+app.use('/catch-game', catchGameRoutes);
+app.use('/orders', orderRoutes);
+
+// Health check endpoint (both /api/health and /health)
+app.get(['/api/health', '/health'], (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Backend service with WebSocket support is running',
@@ -100,11 +117,11 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// JSON 404 handler for unknown /api endpoints
-app.use('/api/*', (req, res) => {
+// JSON 404 handler for all unknown endpoints
+app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message: `API endpoint ${req.originalUrl} not found`,
+    message: `Cannot ${req.method} ${req.originalUrl}. Route not found on live API server.`,
   });
 });
 
