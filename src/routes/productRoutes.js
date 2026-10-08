@@ -19,56 +19,70 @@ const upload = multer({
 });
 
 // POST /api/products/fetch-meesho-details - Auto fetch product info from Meesho link
-router.post('/fetch-meesho-details', async (req, res) => {
-  try {
-    const { url } = req.body;
-    if (!url) {
+router.route('/fetch-meesho-details')
+  .post(async (req, res) => {
+    try {
+      const { url } = req.body || {};
+      if (!url || typeof url !== 'string' || !url.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Meesho product URL is required'
+        });
+      }
+
+      const details = await fetchMeeshoProductDetails(url.trim());
+      return res.status(200).json({
+        success: true,
+        message: 'Product details fetched successfully from Meesho link',
+        data: details
+      });
+    } catch (error) {
+      console.error('Error fetching Meesho details:', error.message);
       return res.status(400).json({
         success: false,
-        message: 'Meesho product URL is required'
+        message: error.message || 'Failed to fetch Meesho product details'
       });
     }
-
-    const details = await fetchMeeshoProductDetails(url);
-    return res.status(200).json({
-      success: true,
-      message: 'Product details fetched successfully from Meesho link',
-      data: details
-    });
-  } catch (error) {
-    console.error('Error fetching Meesho details:', error.message);
-    return res.status(400).json({
+  })
+  .all((req, res) => {
+    return res.status(405).json({
       success: false,
-      message: error.message || 'Failed to fetch Meesho product details'
+      message: `Method ${req.method} not allowed for /api/products/fetch-meesho-details. Please use POST with JSON body { "url": "..." }.`
     });
-  }
-});
+  });
 
 // POST /api/products/fetch-meesho-reviews - Auto fetch reviews from Meesho link
-router.post('/fetch-meesho-reviews', async (req, res) => {
-  try {
-    const { url, count } = req.body;
-    if (!url) {
+router.route('/fetch-meesho-reviews')
+  .post(async (req, res) => {
+    try {
+      const { url, count } = req.body || {};
+      if (!url || typeof url !== 'string' || !url.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Meesho product URL is required'
+        });
+      }
+
+      const reviewData = await fetchMeeshoProductReviews(url.trim(), count || 30);
+      return res.status(200).json({
+        success: true,
+        message: `Successfully fetched ${reviewData.reviews.length} reviews from Meesho link`,
+        data: reviewData
+      });
+    } catch (error) {
+      console.error('Error fetching Meesho reviews:', error.message);
       return res.status(400).json({
         success: false,
-        message: 'Meesho product URL is required'
+        message: error.message || 'Failed to fetch Meesho product reviews'
       });
     }
-
-    const reviewData = await fetchMeeshoProductReviews(url, count || 30);
-    return res.status(200).json({
-      success: true,
-      message: `Successfully fetched ${reviewData.reviews.length} reviews from Meesho link`,
-      data: reviewData
-    });
-  } catch (error) {
-    console.error('Error fetching Meesho reviews:', error.message);
-    return res.status(400).json({
+  })
+  .all((req, res) => {
+    return res.status(405).json({
       success: false,
-      message: error.message || 'Failed to fetch Meesho product reviews'
+      message: `Method ${req.method} not allowed for /api/products/fetch-meesho-reviews. Please use POST with JSON body { "url": "..." }.`
     });
-  }
-});
+  });
 
 // POST /api/products/:id/import-reviews - Bulk import selected reviews to product
 router.post('/:id/import-reviews', async (req, res) => {

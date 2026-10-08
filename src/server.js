@@ -117,16 +117,12 @@ app.get(['/api/health', '/health'], (req, res) => {
   });
 });
 
-// JSON 404 handler for all unknown endpoints
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Cannot ${req.method} ${req.originalUrl}. Route not found on live API server.`,
-  });
-});
-
 // JSON Syntax & Body Parser Error Handler Middleware
 app.use((err, req, res, next) => {
+  console.error('Unhandled API Error:', err);
+  if (res.headersSent) {
+    return next(err);
+  }
   if (err.type === 'entity.too.large' || err.status === 413) {
     return res.status(413).json({
       success: false,
@@ -139,7 +135,18 @@ app.use((err, req, res, next) => {
       message: 'Invalid JSON payload provided',
     });
   }
-  next(err);
+  return res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Internal Server Error',
+  });
+});
+
+// JSON 404 handler for all unknown endpoints
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Cannot ${req.method} ${req.originalUrl}. Route not found on live API server.`,
+  });
 });
 
 // Start Server
@@ -150,18 +157,14 @@ const startServer = async () => {
     await connectDB();
     await seedDefaultUser();
   } catch (err) {
-    console.error('Database connection / seed error on startup:', err.message);
+    console.error('Database connection / seed warning on startup:', err.message);
   }
 
-  if (require.main === module || !process.env.VERCEL) {
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 WebSocket & Express server running on port ${PORT} (0.0.0.0)`);
-      console.log(`🔑 Auth endpoints: http://localhost:${PORT}/api/auth/login & http://10.0.2.2:${PORT}/api/auth/register`);
-    });
-  }
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 WebSocket & Express server running on port ${PORT} (0.0.0.0)`);
+    console.log(`🔑 Auth endpoints: http://localhost:${PORT}/api/auth/login & http://10.0.2.2:${PORT}/api/auth/register`);
+  });
 };
 
 startServer();
-
-module.exports = app;
 
