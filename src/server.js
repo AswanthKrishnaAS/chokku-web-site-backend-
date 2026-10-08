@@ -146,13 +146,22 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
-  await connectDB();
-  await seedDefaultUser();
+  try {
+    await connectDB();
+    await seedDefaultUser();
+  } catch (err) {
+    console.error('Database connection / seed error on startup:', err.message);
+  }
 
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 WebSocket & Express server running on port ${PORT} (0.0.0.0)`);
-    console.log(`🔑 Auth endpoints: http://localhost:${PORT}/api/auth/login & http://10.0.2.2:${PORT}/api/auth/register`);
-  });
+  if (require.main === module || !process.env.VERCEL) {
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 WebSocket & Express server running on port ${PORT} (0.0.0.0)`);
+      console.log(`🔑 Auth endpoints: http://localhost:${PORT}/api/auth/login & http://10.0.2.2:${PORT}/api/auth/register`);
+    });
+  }
 };
 
 startServer();
+
+module.exports = app;
+
