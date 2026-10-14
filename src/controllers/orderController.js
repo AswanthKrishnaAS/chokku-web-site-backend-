@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const Order = require('../models/Order');
@@ -96,7 +97,10 @@ const createRazorpayOrder = async (req, res) => {
     const razorpayOrder = await razorpay.orders.create(razorpayOptions);
 
     // 2. Save pending order details in MongoDB
-    const customerId = req.customer?._id || req.body.customerId || null;
+    let customerId = req.customer?._id || null;
+    if (!customerId && req.body.customerId && mongoose.Types.ObjectId.isValid(req.body.customerId)) {
+      customerId = req.body.customerId;
+    }
 
     const newOrder = new Order({
       orderCustomId,
@@ -339,7 +343,28 @@ const createCodOrder = async (req, res) => {
     }
 
     const orderCustomId = `ORD-2026-${Math.floor(100000 + Math.random() * 900000)}`;
-    const customerId = req.customer?._id || req.body.customerId || null;
+    let customerId = req.customer?._id || null;
+    if (!customerId && req.body.customerId && mongoose.Types.ObjectId.isValid(req.body.customerId)) {
+      customerId = req.body.customerId;
+    }
+
+    // Auto-resolve customer by email/phone if customerId is not yet linked
+    if (!customerId && shippingAddress?.email) {
+      try {
+        const foundCust = await Customer.findOne({ email: shippingAddress.email.toLowerCase() });
+        if (foundCust) customerId = foundCust._id;
+      } catch (e) {}
+    }
+    if (!customerId && shippingAddress?.phone) {
+      try {
+        const foundCust = await Customer.findOne({ phone: shippingAddress.phone });
+        if (foundCust) customerId = foundCust._id;
+      } catch (e) {}
+    }
+
+    const now = new Date();
+    const paymentDate = now.toISOString().split('T')[0];
+    const paymentTime = now.toTimeString().split(' ')[0];
 
     const newOrder = new Order({
       orderCustomId,
@@ -348,6 +373,7 @@ const createCodOrder = async (req, res) => {
         name: shippingAddress.fullName,
         email: shippingAddress.email,
         phone: shippingAddress.phone,
+        username: customerInfo?.username || shippingAddress.email,
       },
       items,
       subtotal: Number(subtotal || totalAmount),
@@ -358,6 +384,16 @@ const createCodOrder = async (req, res) => {
       paymentMethod: 'Cash on Delivery (COD)',
       paymentStatus: 'cod',
       status: 'Processing',
+      paymentDate,
+      paymentTime,
+      paymentMethodDetails: {
+        method: 'cod',
+        amountPaid: 0,
+        currency: 'INR',
+        email: shippingAddress.email || '',
+        contact: shippingAddress.phone || '',
+        capturedAt: now,
+      },
       estimatedDelivery: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     });
 
@@ -366,13 +402,14 @@ const createCodOrder = async (req, res) => {
     // Auto-sync address into Customer collection (max 3 addresses)
     await syncCustomerAddressOnOrder(customerId, shippingAddress, customerInfo);
 
-    // Emit real-time notification
+    // Emit real-time notifications to admin & listeners
     const io = req.app.get('io');
     if (io) {
       const orderData = {
         id: newOrder.orderCustomId,
         _id: newOrder._id,
-        date: newOrder.createdAt.toISOString().split('T')[0],
+        date: newOrder.createdAt ? newOrder.createdAt.toISOString().split('T')[0] : paymentDate,
+        createdAt: newOrder.createdAt ? newOrder.createdAt.toISOString() : now.toISOString(),
         items: newOrder.items,
         subtotal: newOrder.subtotal,
         discount: newOrder.discount,
@@ -381,11 +418,16 @@ const createCodOrder = async (req, res) => {
         status: newOrder.status,
         paymentStatus: newOrder.paymentStatus,
         shippingAddress: newOrder.shippingAddress,
+        customerInfo: newOrder.customerInfo,
         paymentMethod: newOrder.paymentMethod,
+        paymentMethodDetails: newOrder.paymentMethodDetails,
+        paymentDate: newOrder.paymentDate,
+        paymentTime: newOrder.paymentTime,
         estimatedDelivery: newOrder.estimatedDelivery,
       };
       io.emit('admin_new_order', orderData);
       io.emit('new_order', orderData);
+      io.emit('admin_payment_update', orderData);
     }
 
     // Send real-time FCM Push Notification to Admin mobile devices
