@@ -108,6 +108,25 @@ app.use('/try-on', tryOnRoutes);
 app.use('/catch-game', catchGameRoutes);
 app.use('/orders', orderRoutes);
 
+// Root endpoint & Health check endpoints
+app.get(['/', '/api'], (req, res) => {
+  res.status(200).json({
+    status: 'OK',
+    service: 'Chokku Store Backend API',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/api/health',
+      products: '/api/products',
+      categories: '/api/categories',
+      homepageSliders: '/api/homepage-sliders',
+      websiteSettings: '/api/website-settings',
+      meeshoDetails: '/api/products/fetch-meesho-details',
+      meeshoReviews: '/api/products/fetch-meesho-reviews',
+    },
+  });
+});
+
 // Health check endpoint (both /api/health and /health)
 app.get(['/api/health', '/health'], (req, res) => {
   res.status(200).json({
