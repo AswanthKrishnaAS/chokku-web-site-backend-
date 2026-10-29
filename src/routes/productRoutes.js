@@ -1,6 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const Product = require('../models/Product');
+const Order = require('../models/Order');
 const { uploadToBucketOrLocal } = require('../config/supabase');
 const { fetchMeeshoProductDetails, fetchMeeshoProductReviews } = require('../utils/meeshoScraper');
 
@@ -145,19 +146,104 @@ router.post('/:id/import-reviews', async (req, res) => {
   }
 });
 
-// GET /api/products - Retrieve all products
+// Helper to fetch all products from MongoDB enriched with real sales data from Order collection
+const getProductsWithSales = async () => {
+  const products = await Product.find({}).sort({ createdAt: -1 });
+
+  const salesMap = {};
+  try {
+    const salesAgg = await Order.aggregate([
+      { $unwind: '$items' },
+      {
+        $group: {
+          _id: {
+            id: '$items.id',
+            name: { $ifNull: ['$items.name', '$items.title'] },
+          },
+          totalQty: { $sum: { $ifNull: ['$items.quantity', 1] } },
+        },
+      },
+    ]);
+    salesAgg.forEach((s) => {
+      if (s._id?.id) {
+        salesMap[String(s._id.id)] = (salesMap[String(s._id.id)] || 0) + s.totalQty;
+      }
+      if (s._id?.name) {
+        salesMap[String(s._id.name).trim().toLowerCase()] = (salesMap[String(s._id.name).trim().toLowerCase()] || 0) + s.totalQty;
+      }
+    });
+  } catch (aggErr) {
+    console.warn('Could not aggregate sales data for products:', aggErr.message);
+  }
+
+  return products.map((p) => {
+    const pObj = p.toObject();
+    const actualSales = salesMap[p.id] || salesMap[String(p.name).trim().toLowerCase()] || pObj.salesCount || 0;
+    return {
+      ...pObj,
+      salesCount: actualSales,
+    };
+  });
+};
+
+// GET /api/products - Retrieve all products with live sales data
 router.get('/', async (req, res) => {
   try {
-    const products = await Product.find({}).sort({ createdAt: -1 });
+    const productsWithSales = await getProductsWithSales();
     return res.status(200).json({
       success: true,
-      products,
+      products: productsWithSales,
     });
   } catch (error) {
     console.error('Error fetching products:', error);
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch products',
+      error: error.message,
+    });
+  }
+});
+
+// PATCH /api/products/:id/toggle-featured - Quick toggle featured status
+router.patch('/:id/toggle-featured', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const product = await Product.findOne({ id });
+    if (!product) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+    product.isFeatured = !product.isFeatured;
+    await product.save();
+
+    const products = await getProductsWithSales();
+    return res.status(200).json({
+      success: true,
+      message: `Product ${product.isFeatured ? 'marked as Featured' : 'removed from Featured'}`,
+      product,
+      products,
+    });
+  } catch (error) {
+    console.error('Error toggling featured status:', error);
+    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+});
+
+// DELETE /api/products/:id - Delete product from catalog
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Product.findOneAndDelete({ id });
+    const products = await getProductsWithSales();
+    return res.status(200).json({
+      success: true,
+      message: 'Product deleted successfully',
+      products,
+    });
+  } catch (error) {
+    console.error('Error deleting product:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error deleting product',
       error: error.message,
     });
   }
@@ -193,6 +279,8 @@ router.post('/', async (req, res) => {
       isNewArrival,
       isBestSeller,
       tags,
+      isCodAvailable,
+      isOnlinePaymentAvailable,
       tryOn,
       tryOnEnabled,
       tryOnImages,
@@ -265,6 +353,8 @@ router.post('/', async (req, res) => {
       product.isNewArrival = Boolean(isNewArrival);
       product.isBestSeller = Boolean(isBestSeller);
       product.tags = Array.isArray(tags) ? tags : product.tags || [];
+      product.isCodAvailable = isCodAvailable !== undefined ? Boolean(isCodAvailable) : (product.isCodAvailable !== undefined ? product.isCodAvailable : true);
+      product.isOnlinePaymentAvailable = isOnlinePaymentAvailable !== undefined ? Boolean(isOnlinePaymentAvailable) : (product.isOnlinePaymentAvailable !== undefined ? product.isOnlinePaymentAvailable : true);
       product.tryOn = isTryOnActive;
       product.tryOnEnabled = isTryOnActive;
       product.tryOnImages = tryOnImgList;
@@ -302,6 +392,8 @@ router.post('/', async (req, res) => {
         isNewArrival: Boolean(isNewArrival),
         isBestSeller: Boolean(isBestSeller),
         tags: Array.isArray(tags) ? tags : [],
+        isCodAvailable: isCodAvailable !== undefined ? Boolean(isCodAvailable) : true,
+        isOnlinePaymentAvailable: isOnlinePaymentAvailable !== undefined ? Boolean(isOnlinePaymentAvailable) : true,
         tryOn: isTryOnActive,
         tryOnEnabled: isTryOnActive,
         tryOnImages: tryOnImgList,
@@ -314,7 +406,7 @@ router.post('/', async (req, res) => {
       });
     }
 
-    const products = await Product.find({}).sort({ createdAt: -1 });
+    const products = await getProductsWithSales();
 
     return res.status(200).json({
       success: true,
@@ -543,7 +635,7 @@ router.put('/:id/reviews/:reviewId', async (req, res) => {
     product.reviewCount = product.reviews.length;
 
     await product.save();
-    const products = await Product.find({}).sort({ createdAt: -1 });
+    const products = await getProductsWithSales();
 
     return res.status(200).json({
       success: true,
@@ -581,7 +673,7 @@ router.delete('/:id/reviews/:reviewId', async (req, res) => {
     product.reviewCount = product.reviews.length;
 
     await product.save();
-    const products = await Product.find({}).sort({ createdAt: -1 });
+    const products = await getProductsWithSales();
 
     return res.status(200).json({
       success: true,

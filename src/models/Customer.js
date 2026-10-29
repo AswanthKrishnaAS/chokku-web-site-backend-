@@ -83,10 +83,41 @@ const customerSchema = new mongoose.Schema(
         playedAt: { type: Date, default: Date.now }
       }
     ],
+    spinAndWin: [
+      {
+        slotIndex: { type: Number },
+        slotNumber: { type: Number },
+        prizeLabel: { type: String },
+        rewardType: { type: String },
+        coinValue: { type: Number, default: 0 },
+        couponCode: { type: String, default: '' },
+        clientRequestId: { type: String, default: '' },
+        playedAt: { type: Date, default: Date.now }
+      }
+    ],
+    lastSpinAt: {
+      type: Date,
+    },
     walletBalance: {
       type: Number,
       default: 0,
     },
+    walletTransactions: [
+      {
+        type: {
+          type: String,
+          enum: ['SPIN_AND_WIN', 'CATCH_THE_GIFT', 'CONVERSION', 'PURCHASE_REDEEM', 'ADMIN_ADJUST'],
+          default: 'SPIN_AND_WIN',
+        },
+        title: { type: String, required: true },
+        prize: { type: String, default: '' },
+        amount: { type: Number, required: true },
+        unit: { type: String, enum: ['POINTS', 'RUPEES'], default: 'POINTS' },
+        description: { type: String, default: '' },
+        date: { type: Date, default: Date.now },
+        referenceId: { type: String, default: '' },
+      }
+    ],
     pointConversions: [
       {
         pointsConverted: { type: Number, required: true },

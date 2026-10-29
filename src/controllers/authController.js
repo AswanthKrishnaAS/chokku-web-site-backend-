@@ -165,6 +165,7 @@ const loginUser = async (req, res) => {
         pincode: customer.pincode,
         avatarUrl: customer.avatarUrl,
         role: customer.role || 'customer',
+        walletBalance: customer.walletBalance || 0,
       },
     });
   } catch (error) {
@@ -196,6 +197,13 @@ const registerUser = async (req, res) => {
     }
 
     const cleanPhone = phone.trim();
+    const phoneDigits = cleanPhone.replace(/\D/g, '');
+    if (phoneDigits.length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid 10-digit mobile number',
+      });
+    }
 
     // Prevent using Admin reserved username/email
     if (userEmail === 'chokku@store.com' || userEmail === 'chokku admin') {

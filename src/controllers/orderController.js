@@ -3,6 +3,7 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const Order = require('../models/Order');
 const Customer = require('../models/Customer');
+const Product = require('../models/Product');
 const { sendNewOrderPushNotification } = require('../services/fcmService');
 
 // Helper to auto-sync shipping address to Customer addresses array in MongoDB (max 3 addresses)
@@ -68,7 +69,7 @@ const getRazorpayInstance = () => {
  */
 const createRazorpayOrder = async (req, res) => {
   try {
-    const { items, subtotal, discount, deliveryFee, totalAmount, shippingAddress, customerInfo } = req.body;
+    const { items, subtotal, discount, deliveryFee, totalAmount, shippingAddress, customerInfo, storeCashApplied } = req.body;
 
     if (!items || !items.length || !totalAmount || !shippingAddress) {
       return res.status(400).json({
@@ -113,6 +114,7 @@ const createRazorpayOrder = async (req, res) => {
       items,
       subtotal: Number(subtotal || totalAmount),
       discount: Number(discount || 0),
+      storeCashApplied: Number(storeCashApplied || 0),
       deliveryFee: Number(deliveryFee || 0),
       totalAmount: Number(totalAmount),
       shippingAddress,
@@ -267,6 +269,42 @@ const verifyRazorpayPayment = async (req, res) => {
 
       await order.save();
 
+      // Automatically increment salesCount for each purchased product
+      if (Array.isArray(order.items)) {
+        for (const it of order.items) {
+          const pId = it.id || it._id;
+          if (pId) {
+            Product.findOneAndUpdate(
+              { $or: [{ id: pId }, { _id: mongoose.Types.ObjectId.isValid(pId) ? pId : undefined }].filter(Boolean) },
+              { $inc: { salesCount: Number(it.quantity) || 1 } }
+            ).catch(() => {});
+          }
+        }
+      }
+
+      // Deduct Store Cash from Customer wallet if applied
+      if (order.storeCashApplied > 0 && order.customer) {
+        try {
+          await Customer.findByIdAndUpdate(order.customer, {
+            $inc: { walletBalance: -Math.abs(Number(order.storeCashApplied)) },
+            $push: {
+              walletTransactions: {
+                type: 'PURCHASE_REDEEM',
+                title: `Store Cash Used on Order #${order.orderCustomId || order._id}`,
+                prize: 'Store Cash Applied',
+                amount: -Math.abs(Number(order.storeCashApplied)),
+                unit: 'RUPEES',
+                description: `Applied ₹${order.storeCashApplied} Store Cash towards order #${order.orderCustomId || order._id} checkout`,
+                date: new Date(),
+                referenceId: String(order._id),
+              },
+            },
+          });
+        } catch (e) {
+          console.warn('⚠️ Could not deduct store cash from customer wallet:', e.message);
+        }
+      }
+
       // Real-time notification to admin dashboard via Socket.IO
       const io = req.app.get('io');
       if (io) {
@@ -278,6 +316,7 @@ const verifyRazorpayPayment = async (req, res) => {
           items: order.items,
           subtotal: order.subtotal,
           discount: order.discount,
+          storeCashApplied: order.storeCashApplied || 0,
           deliveryFee: order.deliveryFee,
           totalAmount: order.totalAmount,
           status: order.status,
@@ -333,7 +372,7 @@ const verifyRazorpayPayment = async (req, res) => {
  */
 const createCodOrder = async (req, res) => {
   try {
-    const { items, subtotal, discount, deliveryFee, totalAmount, shippingAddress, customerInfo } = req.body;
+    const { items, subtotal, discount, deliveryFee, totalAmount, shippingAddress, customerInfo, storeCashApplied } = req.body;
 
     if (!items || !items.length || !totalAmount || !shippingAddress) {
       return res.status(400).json({
@@ -378,6 +417,7 @@ const createCodOrder = async (req, res) => {
       items,
       subtotal: Number(subtotal || totalAmount),
       discount: Number(discount || 0),
+      storeCashApplied: Number(storeCashApplied || 0),
       deliveryFee: Number(deliveryFee || 0),
       totalAmount: Number(totalAmount),
       shippingAddress,
@@ -399,6 +439,42 @@ const createCodOrder = async (req, res) => {
 
     await newOrder.save();
 
+    // Automatically increment salesCount for each purchased product
+    if (Array.isArray(newOrder.items)) {
+      for (const it of newOrder.items) {
+        const pId = it.id || it._id;
+        if (pId) {
+          Product.findOneAndUpdate(
+            { $or: [{ id: pId }, { _id: mongoose.Types.ObjectId.isValid(pId) ? pId : undefined }].filter(Boolean) },
+            { $inc: { salesCount: Number(it.quantity) || 1 } }
+          ).catch(() => {});
+        }
+      }
+    }
+
+    // Deduct Store Cash from Customer wallet if applied
+    if (newOrder.storeCashApplied > 0 && customerId) {
+      try {
+        await Customer.findByIdAndUpdate(customerId, {
+          $inc: { walletBalance: -Math.abs(Number(newOrder.storeCashApplied)) },
+          $push: {
+            walletTransactions: {
+              type: 'PURCHASE_REDEEM',
+              title: `Store Cash Used on Order #${newOrder.orderCustomId || newOrder._id}`,
+              prize: 'Store Cash Applied',
+              amount: -Math.abs(Number(newOrder.storeCashApplied)),
+              unit: 'RUPEES',
+              description: `Applied ₹${newOrder.storeCashApplied} Store Cash towards order #${newOrder.orderCustomId || newOrder._id} checkout`,
+              date: new Date(),
+              referenceId: String(newOrder._id),
+            },
+          },
+        });
+      } catch (e) {
+        console.warn('⚠️ Could not deduct store cash from customer wallet:', e.message);
+      }
+    }
+
     // Auto-sync address into Customer collection (max 3 addresses)
     await syncCustomerAddressOnOrder(customerId, shippingAddress, customerInfo);
 
@@ -413,6 +489,7 @@ const createCodOrder = async (req, res) => {
         items: newOrder.items,
         subtotal: newOrder.subtotal,
         discount: newOrder.discount,
+        storeCashApplied: newOrder.storeCashApplied || 0,
         deliveryFee: newOrder.deliveryFee,
         totalAmount: newOrder.totalAmount,
         status: newOrder.status,

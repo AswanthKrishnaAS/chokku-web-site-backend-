@@ -127,9 +127,22 @@ const productSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    salesCount: {
+      type: Number,
+      default: 0,
+    },
     tags: {
       type: [String],
       default: [],
+    },
+    // Payment Options Flags
+    isCodAvailable: {
+      type: Boolean,
+      default: true,
+    },
+    isOnlinePaymentAvailable: {
+      type: Boolean,
+      default: true,
     },
     // Standard TryOn Fields
     tryOn: {

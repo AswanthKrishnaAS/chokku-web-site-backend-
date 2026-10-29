@@ -330,7 +330,9 @@ const getMyPoints = async (req, res) => {
       });
     }
 
-    const dbCustomer = await Customer.findById(customer._id).select('name email phone catchTheGift pointConversions walletBalance');
+    const dbCustomer = await Customer.findById(customer._id).select(
+      'name email phone catchTheGift spinAndWin pointConversions walletBalance walletTransactions'
+    );
     if (!dbCustomer) {
       return res.status(404).json({
         success: false,
@@ -338,28 +340,138 @@ const getMyPoints = async (req, res) => {
       });
     }
 
-    let totalPointsEarned = 0;
+    let totalCatchPoints = 0;
     let highestScore = 0;
 
     if (Array.isArray(dbCustomer.catchTheGift)) {
       dbCustomer.catchTheGift.forEach((entry) => {
         const scoreVal = Number(entry.score) || 0;
-        totalPointsEarned += scoreVal;
+        totalCatchPoints += scoreVal;
         if (scoreVal > highestScore) {
           highestScore = scoreVal;
         }
       });
     }
 
+    let totalSpinCoins = 0;
+    if (Array.isArray(dbCustomer.spinAndWin)) {
+      dbCustomer.spinAndWin.forEach((entry) => {
+        const coinVal = Number(entry.coinValue) || 0;
+        totalSpinCoins += coinVal;
+        if (coinVal > highestScore) {
+          highestScore = coinVal;
+        }
+      });
+    }
+
+    const totalPointsEarned = totalCatchPoints + totalSpinCoins;
+
     let totalPointsConverted = 0;
     if (Array.isArray(dbCustomer.pointConversions)) {
       dbCustomer.pointConversions.forEach((conv) => {
-        totalPointsConverted += (Number(conv.pointsConverted) || 0);
+        totalPointsConverted += Number(conv.pointsConverted) || 0;
       });
     }
 
     const availablePoints = Math.max(0, totalPointsEarned - totalPointsConverted);
     const availableRupees = Math.floor(availablePoints / 1000);
+
+    // Build consolidated wallet and points transaction history
+    let unifiedTransactions = [];
+
+    // 1. Explicit walletTransactions recorded on Customer document
+    if (Array.isArray(dbCustomer.walletTransactions)) {
+      dbCustomer.walletTransactions.forEach((tx) => {
+        unifiedTransactions.push({
+          id: tx._id ? String(tx._id) : `tx-${tx.referenceId || Math.random()}`,
+          type: tx.type,
+          title: tx.title,
+          prize: tx.prize || '',
+          amount: tx.amount,
+          unit: tx.unit || 'POINTS',
+          description: tx.description || '',
+          date: tx.date || new Date(),
+          status: 'COMPLETED',
+        });
+      });
+    }
+
+    // 2. Synthesize transactions for any spinAndWin coin wins not yet in walletTransactions
+    if (Array.isArray(dbCustomer.spinAndWin)) {
+      dbCustomer.spinAndWin.forEach((spin) => {
+        const coins = Number(spin.coinValue) || 0;
+        if (coins > 0) {
+          const ref = `spin_${new Date(spin.playedAt).getTime()}`;
+          const alreadyLogged = unifiedTransactions.some(
+            (t) => t.type === 'SPIN_AND_WIN' && Math.abs(new Date(t.date).getTime() - new Date(spin.playedAt).getTime()) < 2000
+          );
+          if (!alreadyLogged) {
+            unifiedTransactions.push({
+              id: spin._id ? String(spin._id) : `spin-tx-${Math.random()}`,
+              type: 'SPIN_AND_WIN',
+              title: `Spin & Win: ${spin.prizeLabel || 'Coins'}`,
+              prize: spin.prizeLabel || 'Coins',
+              amount: coins,
+              unit: 'POINTS',
+              description: `Won ${coins} Coins in Lucky Spin & Win (${spin.prizeLabel})`,
+              date: spin.playedAt,
+              status: 'COMPLETED',
+            });
+          }
+        }
+      });
+    }
+
+    // 3. Synthesize Catch the Gift games
+    if (Array.isArray(dbCustomer.catchTheGift)) {
+      dbCustomer.catchTheGift.forEach((game) => {
+        const score = Number(game.score) || 0;
+        if (score > 0) {
+          const alreadyLogged = unifiedTransactions.some(
+            (t) => t.type === 'CATCH_THE_GIFT' && Math.abs(new Date(t.date).getTime() - new Date(game.playedAt).getTime()) < 2000
+          );
+          if (!alreadyLogged) {
+            unifiedTransactions.push({
+              id: game._id ? String(game._id) : `catch-tx-${Math.random()}`,
+              type: 'CATCH_THE_GIFT',
+              title: 'Catch the Gift Reward',
+              prize: `${score} Points`,
+              amount: score,
+              unit: 'POINTS',
+              description: `Collected ${score} Points playing Catch the Gift arcade`,
+              date: game.playedAt,
+              status: 'COMPLETED',
+            });
+          }
+        }
+      });
+    }
+
+    // 4. Synthesize point conversions
+    if (Array.isArray(dbCustomer.pointConversions)) {
+      dbCustomer.pointConversions.forEach((conv) => {
+        const alreadyLogged = unifiedTransactions.some(
+          (t) => t.type === 'CONVERSION' && Math.abs(new Date(t.date).getTime() - new Date(conv.convertedAt).getTime()) < 2000
+        );
+        if (!alreadyLogged) {
+          unifiedTransactions.push({
+            id: conv._id ? String(conv._id) : `conv-tx-${Math.random()}`,
+            type: 'CONVERSION',
+            title: 'Points Converted to Store Cash',
+            prize: `₹${conv.rupeesEarned} Store Cash`,
+            amount: conv.rupeesEarned,
+            pointsDeducted: conv.pointsConverted,
+            unit: 'RUPEES',
+            description: `Converted ${conv.pointsConverted.toLocaleString()} game points to ₹${conv.rupeesEarned} Store Cash`,
+            date: conv.convertedAt,
+            status: conv.status || 'COMPLETED',
+          });
+        }
+      });
+    }
+
+    // Sort newest first
+    unifiedTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     return res.status(200).json({
       success: true,
@@ -368,9 +480,14 @@ const getMyPoints = async (req, res) => {
       totalPointsConverted,
       availableRupees,
       highestScore,
-      totalGamesPlayed: dbCustomer.catchTheGift ? dbCustomer.catchTheGift.length : 0,
+      totalCatchPoints,
+      totalSpinCoins,
+      totalGamesPlayed:
+        (dbCustomer.catchTheGift ? dbCustomer.catchTheGift.length : 0) +
+        (dbCustomer.spinAndWin ? dbCustomer.spinAndWin.length : 0),
       walletBalance: dbCustomer.walletBalance || 0,
       conversions: dbCustomer.pointConversions || [],
+      transactions: unifiedTransactions,
       scores: dbCustomer.catchTheGift || [],
     });
   } catch (error) {
@@ -404,11 +521,16 @@ const convertPoints = async (req, res) => {
       });
     }
 
-    // 1. Calculate Total Earned Points
+    // 1. Calculate Total Earned Points (Catch the Gift + Spin and Win)
     let totalPointsEarned = 0;
     if (Array.isArray(dbCustomer.catchTheGift)) {
       dbCustomer.catchTheGift.forEach((entry) => {
-        totalPointsEarned += (Number(entry.score) || 0);
+        totalPointsEarned += Number(entry.score) || 0;
+      });
+    }
+    if (Array.isArray(dbCustomer.spinAndWin)) {
+      dbCustomer.spinAndWin.forEach((entry) => {
+        totalPointsEarned += Number(entry.coinValue) || 0;
       });
     }
 
@@ -416,7 +538,7 @@ const convertPoints = async (req, res) => {
     let totalPointsConverted = 0;
     if (Array.isArray(dbCustomer.pointConversions)) {
       dbCustomer.pointConversions.forEach((conv) => {
-        totalPointsConverted += (Number(conv.pointsConverted) || 0);
+        totalPointsConverted += Number(conv.pointsConverted) || 0;
       });
     }
 
@@ -426,7 +548,8 @@ const convertPoints = async (req, res) => {
     if (availablePoints < 1000) {
       return res.status(400).json({
         success: false,
-        message: 'Minimum 1,000 Points required to convert to ₹1. Play Catch the Gift to earn more points!',
+        message:
+          'Minimum 1,000 Points required to convert to ₹1 Store Cash. Play Spin & Win or Catch the Gift to earn more points!',
         availablePoints,
       });
     }
@@ -445,9 +568,25 @@ const convertPoints = async (req, res) => {
     if (!Array.isArray(dbCustomer.pointConversions)) {
       dbCustomer.pointConversions = [];
     }
-
     dbCustomer.pointConversions.unshift(newConversion);
+
+    // Credit converted rupees into unified Customer wallet balance
     dbCustomer.walletBalance = (Number(dbCustomer.walletBalance) || 0) + rupeesEarned;
+
+    // Log transaction into unified walletTransactions
+    if (!Array.isArray(dbCustomer.walletTransactions)) {
+      dbCustomer.walletTransactions = [];
+    }
+    dbCustomer.walletTransactions.unshift({
+      type: 'CONVERSION',
+      title: 'Points Converted to Store Cash',
+      prize: `₹${rupeesEarned} Store Cash`,
+      amount: rupeesEarned,
+      unit: 'RUPEES',
+      description: `Converted ${pointsToConvert.toLocaleString()} Game Points (Spin & Win + Catch Game) to ₹${rupeesEarned} Store Cash (1,000 pts = ₹1)`,
+      date: new Date(),
+      referenceId: `conv_${Date.now()}`,
+    });
 
     await dbCustomer.save();
 
@@ -455,7 +594,7 @@ const convertPoints = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: `🎉 Successfully converted ${pointsToConvert.toLocaleString()} Points to ₹${rupeesEarned}!`,
+      message: `🎉 Successfully converted ${pointsToConvert.toLocaleString()} Points to ₹${rupeesEarned} Store Cash!`,
       conversion: newConversion,
       pointsConverted: pointsToConvert,
       rupeesEarned,

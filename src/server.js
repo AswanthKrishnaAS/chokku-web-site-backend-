@@ -14,6 +14,7 @@ const categoryRoutes = require('./routes/categoryRoutes');
 const productRoutes = require('./routes/productRoutes');
 const tryOnRoutes = require('./routes/tryOnRoutes');
 const catchGameRoutes = require('./routes/catchGameRoutes');
+const spinGameRoutes = require('./routes/spinGameRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const homepageSliderRoutes = require('./routes/homepageSliderRoutes');
 const http = require('http');
@@ -60,9 +61,11 @@ io.on('connection', (socket) => {
 
 app.set('io', io);
 
-// Security Headers Middleware
+// Security Headers Middleware (Disable strict CSP for API to avoid blocking Razorpay, external CDN resources, and extensions)
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false,
 }));
 
 // Attach io instance to every express request
@@ -94,6 +97,7 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/try-on', tryOnRoutes);
 app.use('/api/catch-game', catchGameRoutes);
+app.use('/api/spin-game', spinGameRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api', authRoutes);
 
@@ -106,6 +110,7 @@ app.use('/categories', categoryRoutes);
 app.use('/products', productRoutes);
 app.use('/try-on', tryOnRoutes);
 app.use('/catch-game', catchGameRoutes);
+app.use('/spin-game', spinGameRoutes);
 app.use('/orders', orderRoutes);
 
 // Root endpoint & Health check endpoints
