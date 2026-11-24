@@ -4,6 +4,7 @@ const {
   getSettings,
   createSettings,
   updateSettings,
+  getGameStatus,
   submitScore,
   getAllScores,
   getMyPoints,
@@ -15,6 +16,9 @@ const { protectCustomer } = require('../middleware/authMiddleware');
 
 // GET /api/catch-game/settings -> Fetch game settings
 router.get('/settings', getSettings);
+
+// GET /api/catch-game/status -> Check user daily play limit & status (Public / optional auth)
+router.get('/status', getGameStatus);
 
 // POST /api/catch-game/settings -> Create settings (1 time only, then disabled)
 router.post('/settings', createSettings);

@@ -1,126 +1,30 @@
-const SpinGame = require('../models/SpinGame');
+const { SpinGame, DEFAULT_SPIN_SLOTS } = require('../models/SpinGame');
+const SpinLog = require('../models/SpinLog');
 const Customer = require('../models/Customer');
 
-// Default 8-slot Prize Configuration as specified in user requirements
-const DEFAULT_SPIN_SLOTS = [
-  {
-    slotIndex: 0,
-    slotNumber: 1,
-    label: 'Jackpot',
-    subLabel: 'Grand Store Jackpot Reward',
-    rewardType: 'jackpot',
-    coinValue: 500,
-    couponCode: 'JACKPOT500',
-    probability: 5,
-    color: '#ea580c', // Electric Orange / Gold
-    textColor: '#ffffff',
-    icon: '👑',
-    badge: 'JACKPOT',
-  },
-  {
-    slotIndex: 1,
-    slotNumber: 2,
-    label: '100 Coins',
-    subLabel: 'Direct 100 coins credited',
-    rewardType: 'coins',
-    coinValue: 100,
-    couponCode: '',
-    probability: 10,
-    color: '#0284c7', // Ocean Blue
-    textColor: '#ffffff',
-    icon: '🪙',
-    badge: 'POPULAR',
-  },
-  {
-    slotIndex: 2,
-    slotNumber: 3,
-    label: '50 Coins',
-    subLabel: 'Instant 50 coins added',
-    rewardType: 'coins',
-    coinValue: 50,
-    couponCode: '',
-    probability: 15,
-    color: '#059669', // Emerald Green
-    textColor: '#ffffff',
-    icon: '★',
-    badge: 'HOT',
-  },
-  {
-    slotIndex: 3,
-    slotNumber: 4,
-    label: '25 Coins',
-    subLabel: 'Instant 25 coins credit',
-    rewardType: 'coins',
-    coinValue: 25,
-    couponCode: '',
-    probability: 20,
-    color: '#d97706', // Amber Gold
-    textColor: '#ffffff',
-    icon: '🪙',
-    badge: 'LUCKY',
-  },
-  {
-    slotIndex: 4,
-    slotNumber: 5,
-    label: 'Free Delivery',
-    subLabel: 'Zero delivery charges voucher',
-    rewardType: 'free_delivery',
-    coinValue: 0,
-    couponCode: 'SPINFREESHIP',
-    probability: 10,
-    color: '#0891b2', // Cyan
-    textColor: '#ffffff',
-    icon: '🚚',
-    badge: 'FAST',
-  },
-  {
-    slotIndex: 5,
-    slotNumber: 6,
-    label: '10 Coins',
-    subLabel: 'Instant 10 coins credit',
-    rewardType: 'coins',
-    coinValue: 10,
-    couponCode: '',
-    probability: 20,
-    color: '#7c3aed', // Purple Violet
-    textColor: '#ffffff',
-    icon: '★',
-    badge: 'BONUS',
-  },
-  {
-    slotIndex: 6,
-    slotNumber: 7,
-    label: 'Bonus Reward',
-    subLabel: 'Exclusive VIP bonus voucher',
-    rewardType: 'bonus',
-    coinValue: 50,
-    couponCode: 'SPINBONUS10',
-    probability: 10,
-    color: '#e11d48', // Rose Red
-    textColor: '#ffffff',
-    icon: '🎁',
-    badge: 'SPECIAL',
-  },
-  {
-    slotIndex: 7,
-    slotNumber: 8,
-    label: 'Better Luck Next Time',
-    subLabel: 'Spin again tomorrow for free!',
-    rewardType: 'no_prize',
-    coinValue: 0,
-    couponCode: '',
-    probability: 10,
-    color: '#64748b', // Slate Gray
-    textColor: '#ffffff',
-    icon: '🍀',
-    badge: 'TRY AGAIN',
-  },
-];
+/**
+ * Helper to resolve customer from req (either auth middleware, header, or query)
+ */
+const resolveCustomer = async (req) => {
+  if (req.customer) {
+    return req.customer;
+  }
+  const userId = req.headers['x-user-id'] || req.query?.userId;
+  if (userId) {
+    try {
+      const cust = await Customer.findById(userId).select('-password');
+      if (cust) return cust;
+    } catch (e) {
+      // invalid ObjectId
+    }
+  }
+  return null;
+};
 
 /**
  * Probability outcome selector
  * Determines the winning slot according to configured probabilities.
- * If total probability < 100%, the unassigned remainder is awarded to 'Better Luck Next Time' / no-prize outcome.
+ * If total probability < 100%, unassigned remainder is awarded to 'Better Luck Next Time' / no-prize outcome.
  */
 function selectWinningSlot(slots) {
   if (!Array.isArray(slots) || slots.length !== 8) {
@@ -159,6 +63,51 @@ function selectWinningSlot(slots) {
   };
 }
 
+/**
+ * Helper to calculate customer total game points across Catch, Spin, and Carrom minus converted
+ */
+const calculateCustomerPoints = (customerDoc) => {
+  let totalCatchPoints = 0;
+  if (Array.isArray(customerDoc.catchTheGift)) {
+    customerDoc.catchTheGift.forEach((e) => {
+      totalCatchPoints += Number(e.score) || 0;
+    });
+  }
+
+  let totalSpinCoins = 0;
+  const seenSpins = new Set();
+  const sumSpins = (e) => {
+    const key = e._id ? String(e._id) : (e.clientRequestId || `${e.playedAt}_${e.slotIndex}`);
+    if (seenSpins.has(key)) return;
+    seenSpins.add(key);
+    totalSpinCoins += Number(e.coinValue) || 0;
+  };
+  if (Array.isArray(customerDoc.spinGame)) customerDoc.spinGame.forEach(sumSpins);
+  if (Array.isArray(customerDoc.spinAndWin)) customerDoc.spinAndWin.forEach(sumSpins);
+
+  let totalCarromPoints = 0;
+  if (Array.isArray(customerDoc.carromGame)) {
+    customerDoc.carromGame.forEach((e) => {
+      const val = typeof e.netPoints === 'number' && e.netPoints !== 0
+        ? e.netPoints
+        : (Number(e.score) || 0);
+      totalCarromPoints += val;
+    });
+  }
+
+  let totalConverted = 0;
+  if (Array.isArray(customerDoc.pointConversions)) {
+    customerDoc.pointConversions.forEach((c) => {
+      totalConverted += Number(c.pointsConverted) || 0;
+    });
+  }
+
+  const availablePoints = Math.max(0, totalCatchPoints + totalSpinCoins + totalCarromPoints - totalConverted);
+  const availableRupees = Math.floor(availablePoints / 1000);
+
+  return { availablePoints, availableRupees, totalCatchPoints, totalSpinCoins, totalCarromPoints, totalConverted };
+};
+
 // @desc    Get Spin and Win Settings
 // @route   GET /api/spin-game/settings
 // @access  Public
@@ -166,22 +115,19 @@ const getSettings = async (req, res) => {
   try {
     let settings = await SpinGame.findOne();
     if (!settings) {
-      return res.status(200).json({
-        success: true,
-        isConfigured: false,
-        settings: {
-          gameTitle: 'Spin and Win',
-          description: 'Spin the lucky wheel every day to unlock guaranteed discount vouchers, coins, and grand prizes!',
-          dailyFreeSpins: 1,
-          totalProbability: 100,
-          slots: DEFAULT_SPIN_SLOTS,
-        },
+      settings = await SpinGame.create({
+        gameTitle: 'Spin and Win',
+        description: 'Spin the lucky wheel daily to win jackpot rewards, coins, free delivery, and vouchers!',
+        dailyFreeSpins: 1,
+        slots: DEFAULT_SPIN_SLOTS,
+        isConfigured: true,
+        totalProbability: 100,
       });
     }
 
     return res.status(200).json({
       success: true,
-      isConfigured: true,
+      isConfigured: settings.isConfigured !== false,
       settings,
     });
   } catch (error) {
@@ -194,7 +140,7 @@ const getSettings = async (req, res) => {
   }
 };
 
-// @desc    Create or Update Spin and Win Settings
+// @desc    Save / Update Spin and Win Settings
 // @route   POST /api/spin-game/settings OR PUT /api/spin-game/settings
 // @access  Admin
 const saveSettings = async (req, res) => {
@@ -202,7 +148,7 @@ const saveSettings = async (req, res) => {
     const {
       slots,
       gameTitle = 'Spin and Win',
-      description = 'Spin the lucky wheel daily to win exciting prizes!',
+      description = 'Spin the lucky wheel daily to win jackpot rewards, coins, free delivery, and vouchers!',
       dailyFreeSpins = 1,
     } = req.body;
 
@@ -233,7 +179,7 @@ const saveSettings = async (req, res) => {
         coinValue: Math.max(0, Number(slot.coinValue) || 0),
         couponCode: String(slot.couponCode || '').trim().toUpperCase(),
         probability: Math.round(prob * 100) / 100, // Round to 2 decimals
-        color: slot.color || DEFAULT_SPIN_SLOTS[idx]?.color || '#059669',
+        color: slot.color || DEFAULT_SPIN_SLOTS[idx]?.color || '#ea580c',
         textColor: slot.textColor || '#ffffff',
         icon: slot.icon || DEFAULT_SPIN_SLOTS[idx]?.icon || '★',
         badge: String(slot.badge || '').trim(),
@@ -242,7 +188,7 @@ const saveSettings = async (req, res) => {
 
     totalProbability = Math.round(totalProbability * 100) / 100;
 
-    // Requirement 7: Ensure total probability does NOT exceed 100%
+    // Requirement: Ensure total probability does NOT exceed 100%
     if (totalProbability > 100) {
       return res.status(400).json({
         success: false,
@@ -251,14 +197,16 @@ const saveSettings = async (req, res) => {
       });
     }
 
+    const validatedSpins = Math.max(1, Number(dailyFreeSpins) || 1);
+
     // Upsert SpinGame document
     const updatedSettings = await SpinGame.findOneAndUpdate(
       {},
       {
         $set: {
-          gameTitle,
-          description,
-          dailyFreeSpins: Number(dailyFreeSpins) || 1,
+          gameTitle: String(gameTitle).trim(),
+          description: String(description).trim(),
+          dailyFreeSpins: validatedSpins,
           slots: sanitizedSlots,
           isConfigured: true,
           totalProbability,
@@ -283,216 +231,6 @@ const saveSettings = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to save spin game settings',
-    });
-  }
-};
-
-// @desc    Execute Backend-Validated Spin with Duplicate Prevention & Coin Wallet Integration
-// @route   POST /api/spin-game/spin
-// @access  Public / Customer Authenticated
-const executeSpin = async (req, res) => {
-  try {
-    const isTestMode = req.body?.isTestMode === true || req.query?.testMode === 'true';
-    const clientRequestId = req.body?.clientRequestId || req.body?.spinToken || '';
-
-    // 1. Fetch current configured slots from DB or fallback to default
-    let settingsDoc = await SpinGame.findOne();
-    const slots =
-      settingsDoc && Array.isArray(settingsDoc.slots) && settingsDoc.slots.length === 8
-        ? settingsDoc.slots
-        : DEFAULT_SPIN_SLOTS;
-
-    // 2. Identify customer
-    let customer = req.customer;
-    let customerDoc = null;
-
-    if (customer && customer._id) {
-      customerDoc = await Customer.findById(customer._id);
-    } else if (req.headers['x-user-id']) {
-      customerDoc = await Customer.findById(req.headers['x-user-id']);
-    }
-
-    // Require authentication unless in admin test mode
-    if (!customerDoc && !isTestMode) {
-      return res.status(401).json({
-        success: false,
-        message: 'Authentication required. Please sign in to spin and claim rewards.',
-      });
-    }
-
-    // 3. Backend Validation & Duplicate Prevention for Authenticated Customers
-    if (customerDoc && !isTestMode) {
-      // 3A. Idempotency Check: Prevent duplicate rewards if client replays the exact same request token
-      if (clientRequestId && Array.isArray(customerDoc.spinAndWin)) {
-        const existingSpin = customerDoc.spinAndWin.find(
-          (s) => s.clientRequestId && s.clientRequestId === clientRequestId
-        );
-        if (existingSpin) {
-          // Calculate existing points without awarding duplicate coins
-          let totalEarned = 0;
-          if (Array.isArray(customerDoc.catchTheGift)) {
-            customerDoc.catchTheGift.forEach((e) => (totalEarned += Number(e.score) || 0));
-          }
-          if (Array.isArray(customerDoc.spinAndWin)) {
-            customerDoc.spinAndWin.forEach((e) => (totalEarned += Number(e.coinValue) || 0));
-          }
-          let totalConverted = 0;
-          if (Array.isArray(customerDoc.pointConversions)) {
-            customerDoc.pointConversions.forEach((e) => (totalConverted += Number(e.pointsConverted) || 0));
-          }
-          const currentPoints = Math.max(0, totalEarned - totalConverted);
-
-          return res.status(200).json({
-            success: true,
-            isDuplicateReplay: true,
-            winningSlotIndex: existingSpin.slotIndex,
-            winningSlot: {
-              slotIndex: existingSpin.slotIndex,
-              slotNumber: existingSpin.slotNumber,
-              label: existingSpin.prizeLabel,
-              rewardType: existingSpin.rewardType,
-              coinValue: existingSpin.coinValue,
-              couponCode: existingSpin.couponCode,
-            },
-            coinsEarned: existingSpin.coinValue,
-            newTotalPoints: currentPoints,
-            message: 'Previous spin outcome retrieved. Duplicate rewards prevented.',
-          });
-        }
-      }
-
-      // 3B. Rapid Submission Lock: Prevent race conditions from rapid double-clicks (min 3 seconds)
-      if (customerDoc.lastSpinAt) {
-        const msSinceLast = Date.now() - new Date(customerDoc.lastSpinAt).getTime();
-        if (msSinceLast < 3000) {
-          return res.status(429).json({
-            success: false,
-            isRapidRepeat: true,
-            message: 'Please wait a moment between spins.',
-          });
-        }
-      }
-
-      // 3C. Daily Free Spin Cooldown: Enforce 24-hour limit
-      const COOLDOWN_MS = 24 * 60 * 60 * 1000;
-      if (customerDoc.lastSpinAt) {
-        const timeSinceLastSpin = Date.now() - new Date(customerDoc.lastSpinAt).getTime();
-        if (timeSinceLastSpin < COOLDOWN_MS) {
-          const remainingMs = COOLDOWN_MS - timeSinceLastSpin;
-          const hours = Math.floor(remainingMs / (1000 * 60 * 60));
-          const minutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
-          const seconds = Math.floor((remainingMs % (1000 * 60)) / 1000);
-          const countdown = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-
-          return res.status(400).json({
-            success: false,
-            alreadySpun: true,
-            message: `Daily free spin already claimed! Next spin available in ${countdown}.`,
-            remainingMs,
-            nextSpinAvailableAt: new Date(Date.now() + remainingMs),
-          });
-        }
-      }
-    }
-
-    // 4. Select winning slot using backend probability algorithm
-    const outcome = selectWinningSlot(slots);
-    const { winningSlotIndex, winningSlot, roll, isRemainder } = outcome;
-    const coinsWon = Number(winningSlot.coinValue) || 0;
-
-    let newTotalPoints = 0;
-    let availableRupees = 0;
-
-    // 5. Update coin balance & transaction history securely on backend
-    if (customerDoc) {
-      if (!Array.isArray(customerDoc.spinAndWin)) {
-        customerDoc.spinAndWin = [];
-      }
-
-      const spinEntry = {
-        slotIndex: winningSlotIndex,
-        slotNumber: winningSlot.slotNumber || winningSlotIndex + 1,
-        prizeLabel: winningSlot.label,
-        rewardType: winningSlot.rewardType,
-        coinValue: coinsWon,
-        couponCode: winningSlot.couponCode || '',
-        clientRequestId: clientRequestId || '',
-        playedAt: new Date(),
-      };
-
-      customerDoc.spinAndWin.unshift(spinEntry);
-
-      // Record in Customer's unified wallet transaction history
-      if (coinsWon > 0) {
-        if (!Array.isArray(customerDoc.walletTransactions)) {
-          customerDoc.walletTransactions = [];
-        }
-
-        customerDoc.walletTransactions.unshift({
-          type: 'SPIN_AND_WIN',
-          title: `Spin & Win: ${winningSlot.label}`,
-          prize: winningSlot.label,
-          amount: coinsWon,
-          unit: 'POINTS',
-          description: `Won ${coinsWon} Coins on Lucky Spin Wheel slot #${winningSlot.slotNumber || winningSlotIndex + 1} (${winningSlot.label})`,
-          date: new Date(),
-          referenceId: `spin_${Date.now()}_${winningSlotIndex}`,
-        });
-      }
-
-      // Update lastSpinAt timestamp to enforce cooldown
-      customerDoc.lastSpinAt = new Date();
-      await customerDoc.save();
-
-      // Recalculate customer's updated total points across all games
-      let totalEarned = 0;
-      if (Array.isArray(customerDoc.catchTheGift)) {
-        customerDoc.catchTheGift.forEach((e) => (totalEarned += Number(e.score) || 0));
-      }
-      if (Array.isArray(customerDoc.spinAndWin)) {
-        customerDoc.spinAndWin.forEach((e) => (totalEarned += Number(e.coinValue) || 0));
-      }
-      let totalConverted = 0;
-      if (Array.isArray(customerDoc.pointConversions)) {
-        customerDoc.pointConversions.forEach((e) => (totalConverted += Number(e.pointsConverted) || 0));
-      }
-      newTotalPoints = Math.max(0, totalEarned - totalConverted);
-      availableRupees = Math.floor(newTotalPoints / 1000);
-    }
-
-    return res.status(200).json({
-      success: true,
-      winningSlotIndex,
-      winningSlot: {
-        slotIndex: winningSlotIndex,
-        slotNumber: winningSlot.slotNumber || winningSlotIndex + 1,
-        label: winningSlot.label,
-        subLabel: winningSlot.subLabel,
-        rewardType: winningSlot.rewardType,
-        coinValue: winningSlot.coinValue || 0,
-        couponCode: winningSlot.couponCode || '',
-        color: winningSlot.color,
-        textColor: winningSlot.textColor,
-        icon: winningSlot.icon,
-        badge: winningSlot.badge,
-      },
-      coinsEarned: coinsWon,
-      couponCode: winningSlot.couponCode || '',
-      newTotalPoints,
-      availableRupees,
-      walletBalance: customerDoc ? customerDoc.walletBalance || 0 : 0,
-      transactionRecorded: coinsWon > 0,
-      rollInfo: {
-        roll,
-        isRemainder,
-      },
-      message: `Spin outcome confirmed: ${winningSlot.label}${coinsWon > 0 ? ` (+${coinsWon} coins added to wallet)` : ''}`,
-    });
-  } catch (error) {
-    console.error('Execute spin error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to generate backend spin outcome',
       error: error.message,
     });
   }
@@ -503,62 +241,84 @@ const executeSpin = async (req, res) => {
 // @access  Public / Customer Authenticated
 const getSpinStatus = async (req, res) => {
   try {
-    let customer = req.customer;
-    let customerDoc = null;
+    const customer = await resolveCustomer(req);
 
-    if (customer && customer._id) {
-      customerDoc = await Customer.findById(customer._id);
-    } else if (req.headers['x-user-id']) {
-      customerDoc = await Customer.findById(req.headers['x-user-id']);
-    }
+    let settings = await SpinGame.findOne();
+    const maxSpins = settings && typeof settings.dailyFreeSpins === 'number' && settings.dailyFreeSpins > 0
+      ? settings.dailyFreeSpins
+      : 1;
 
-    if (!customerDoc) {
+    if (!customer) {
       return res.status(200).json({
         success: true,
         isAuthenticated: false,
-        canSpin: false,
-        message: 'Please log in to spin and win rewards',
+        canSpin: true,
+        spinsUsed: 0,
+        maxSpins,
+        spinsRemaining: maxSpins,
+        remainingMs: 0,
+        nextSpinAvailableAt: null,
+        lastSpinAt: null,
+        availablePoints: 0,
+        availableRupees: 0,
+        walletBalance: 0,
+        totalSpins: 0,
+        message: 'Please log in to spin and claim rewards',
       });
     }
 
-    const COOLDOWN_MS = 24 * 60 * 60 * 1000;
-    let canSpin = true;
-    let remainingMs = 0;
-    let nextSpinAvailableAt = null;
+    // Rolling 24-hour window
+    const windowMs = 24 * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - windowMs);
 
-    if (customerDoc.lastSpinAt) {
-      const diff = Date.now() - new Date(customerDoc.lastSpinAt).getTime();
-      if (diff < COOLDOWN_MS) {
-        canSpin = false;
-        remainingMs = COOLDOWN_MS - diff;
-        nextSpinAvailableAt = new Date(Date.now() + remainingMs);
+    let recentSpins = await SpinLog.find({
+      userId: customer._id,
+      isTestMode: { $ne: true },
+      playedAt: { $gte: cutoff },
+    }).sort({ playedAt: 1 });
+
+    // Fallback if no SpinLog records exist yet but customer document has spinGame/spinAndWin entries
+    if (recentSpins.length === 0) {
+      const allSpins = [
+        ...(Array.isArray(customer.spinGame) ? customer.spinGame : []),
+        ...(Array.isArray(customer.spinAndWin) ? customer.spinAndWin : []),
+      ];
+      const recentCustomerSpins = allSpins.filter((s) => s.playedAt && new Date(s.playedAt) >= cutoff);
+      if (recentCustomerSpins.length > 0) {
+        recentSpins = recentCustomerSpins;
       }
     }
 
-    // Calculate customer total points
-    let totalEarned = 0;
-    if (Array.isArray(customerDoc.catchTheGift)) {
-      customerDoc.catchTheGift.forEach((e) => (totalEarned += Number(e.score) || 0));
+    const spinsUsed = recentSpins.length;
+    const spinsRemaining = Math.max(0, maxSpins - spinsUsed);
+    const canSpin = spinsRemaining > 0;
+
+    let remainingMs = 0;
+    if (!canSpin && recentSpins.length > 0) {
+      const earliestSpinTime = new Date(recentSpins[0].playedAt).getTime();
+      remainingMs = Math.max(0, earliestSpinTime + windowMs - Date.now());
     }
-    if (Array.isArray(customerDoc.spinAndWin)) {
-      customerDoc.spinAndWin.forEach((e) => (totalEarned += Number(e.coinValue) || 0));
-    }
-    let totalConverted = 0;
-    if (Array.isArray(customerDoc.pointConversions)) {
-      customerDoc.pointConversions.forEach((e) => (totalConverted += Number(e.pointsConverted) || 0));
-    }
-    const availablePoints = Math.max(0, totalEarned - totalConverted);
+
+    const lastSpinAt = recentSpins.length > 0
+      ? recentSpins[recentSpins.length - 1].playedAt
+      : customer.lastSpinAt || null;
+
+    const { availablePoints, availableRupees } = calculateCustomerPoints(customer);
 
     return res.status(200).json({
       success: true,
       isAuthenticated: true,
       canSpin,
+      spinsUsed,
+      maxSpins,
+      spinsRemaining,
       remainingMs,
-      nextSpinAvailableAt,
-      lastSpinAt: customerDoc.lastSpinAt,
+      nextSpinAvailableAt: remainingMs > 0 ? new Date(Date.now() + remainingMs) : null,
+      lastSpinAt,
       availablePoints,
-      walletBalance: customerDoc.walletBalance || 0,
-      totalSpins: Array.isArray(customerDoc.spinAndWin) ? customerDoc.spinAndWin.length : 0,
+      availableRupees,
+      walletBalance: customer.walletBalance || 0,
+      totalSpins: spinsUsed,
     });
   } catch (error) {
     console.error('Get spin status error:', error);
@@ -570,82 +330,288 @@ const getSpinStatus = async (req, res) => {
   }
 };
 
-// @desc    Simulate N spins to verify configured winning probabilities empirically
-// @route   POST /api/spin-game/simulate
-// @access  Admin / Public
-const simulateSpins = async (req, res) => {
+// @desc    Execute Backend-Validated Spin with Duplicate Prevention & Coin Wallet Integration
+// @route   POST /api/spin-game/spin
+// @access  Public (Test mode) / Customer Authenticated
+const executeSpin = async (req, res) => {
   try {
-    const count = Math.min(50000, Math.max(10, Number(req.body.count) || 1000));
-    let { slots } = req.body;
+    const isTestMode = req.body?.isTestMode === true || req.query?.testMode === 'true';
+    const clientRequestId = req.body?.clientRequestId || req.body?.spinToken || '';
 
-    if (!Array.isArray(slots) || slots.length !== 8) {
-      const settingsDoc = await SpinGame.findOne();
-      slots =
-        settingsDoc && Array.isArray(settingsDoc.slots) && settingsDoc.slots.length === 8
-          ? settingsDoc.slots
-          : DEFAULT_SPIN_SLOTS;
+    // 1. Fetch current configured slots from DB or fallback to default
+    let settingsDoc = await SpinGame.findOne();
+    if (!settingsDoc) {
+      settingsDoc = await SpinGame.create({
+        gameTitle: 'Spin and Win',
+        dailyFreeSpins: 1,
+        slots: DEFAULT_SPIN_SLOTS,
+        isConfigured: true,
+        totalProbability: 100,
+      });
     }
 
-    // Initialize tally counters for each of the 8 slots
-    const tallies = slots.map((s, idx) => ({
-      slotIndex: idx,
-      slotNumber: idx + 1,
-      label: s.label,
-      rewardType: s.rewardType,
-      configuredProbability: Number(s.probability) || 0,
-      coinValue: Number(s.coinValue) || 0,
-      wins: 0,
-    }));
+    const slots =
+      settingsDoc && Array.isArray(settingsDoc.slots) && settingsDoc.slots.length === 8
+        ? settingsDoc.slots
+        : DEFAULT_SPIN_SLOTS;
 
-    let remainderHits = 0;
-
-    for (let i = 0; i < count; i++) {
-      const { winningSlotIndex, isRemainder } = selectWinningSlot(slots);
-      tallies[winningSlotIndex].wins++;
-      if (isRemainder) remainderHits++;
+    // 2. TEST MODE: Allowed without customer authentication and does not consume user limit
+    if (isTestMode) {
+      const outcome = selectWinningSlot(slots);
+      const { winningSlotIndex, winningSlot, roll, isRemainder } = outcome;
+      return res.status(200).json({
+        success: true,
+        winningSlotIndex,
+        winningSlot,
+        coinsEarned: Number(winningSlot.coinValue) || 0,
+        couponCode: winningSlot.couponCode || '',
+        newTotalPoints: 0,
+        availableRupees: 0,
+        walletBalance: 0,
+        isTestMode: true,
+        rollInfo: { roll, isRemainder },
+        message: `Test Spin Landed on: ${winningSlot.label}`,
+      });
     }
 
-    // Calculate empirical percentages and variance
-    const results = tallies.map((t) => {
-      const empiricalPercentage = Math.round((t.wins / count) * 10000) / 100;
-      const difference = Math.round((empiricalPercentage - t.configuredProbability) * 100) / 100;
-      return {
-        ...t,
-        empiricalPercentage,
-        difference,
-      };
+    // 3. LIVE CUSTOMER SPIN: Auth required
+    const customer = await resolveCustomer(req);
+    if (!customer) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required. Please sign in to spin and claim rewards.',
+      });
+    }
+
+    const dbCustomer = await Customer.findById(customer._id);
+    if (!dbCustomer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer account not found in database.',
+      });
+    }
+
+    // 4. Backend Validation & Duplicate Prevention
+    // 4A. Idempotency Check: Prevent duplicate rewards if client replays the exact same request token
+    if (clientRequestId) {
+      const duplicateLog = await SpinLog.findOne({
+        userId: dbCustomer._id,
+        clientRequestId,
+      });
+      if (duplicateLog) {
+        const { availablePoints, availableRupees } = calculateCustomerPoints(dbCustomer);
+        return res.status(200).json({
+          success: true,
+          isDuplicateReplay: true,
+          winningSlotIndex: duplicateLog.slotIndex,
+          winningSlot: slots[duplicateLog.slotIndex] || slots[7],
+          coinsEarned: duplicateLog.coinValue,
+          couponCode: duplicateLog.couponCode,
+          newTotalPoints: availablePoints,
+          availableRupees,
+          walletBalance: dbCustomer.walletBalance || 0,
+          message: 'Previous spin outcome retrieved. Duplicate rewards prevented.',
+        });
+      }
+    }
+
+    // 4B. Rapid Submission Lock: Prevent race conditions from rapid double-clicks (min 2.5 seconds)
+    if (dbCustomer.lastSpinAt) {
+      const msSinceLast = Date.now() - new Date(dbCustomer.lastSpinAt).getTime();
+      if (msSinceLast < 2500) {
+        return res.status(429).json({
+          success: false,
+          isRapidRepeat: true,
+          message: 'Please wait a moment between spins.',
+        });
+      }
+    }
+
+    // 4C. Spin limit verification (Rolling 24-hour window)
+    const maxSpins = Math.max(1, Number(settingsDoc.dailyFreeSpins) || 1);
+    const windowMs = 24 * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - windowMs);
+
+    let recentSpins = await SpinLog.find({
+      userId: dbCustomer._id,
+      isTestMode: { $ne: true },
+      playedAt: { $gte: cutoff },
+    }).sort({ playedAt: 1 });
+
+    if (recentSpins.length === 0) {
+      const allSpins = [
+        ...(Array.isArray(dbCustomer.spinGame) ? dbCustomer.spinGame : []),
+        ...(Array.isArray(dbCustomer.spinAndWin) ? dbCustomer.spinAndWin : []),
+      ];
+      const recentCustomerSpins = allSpins.filter((s) => s.playedAt && new Date(s.playedAt) >= cutoff);
+      if (recentCustomerSpins.length > 0) {
+        recentSpins = recentCustomerSpins;
+      }
+    }
+
+    const spinsUsed = recentSpins.length;
+
+    if (spinsUsed >= maxSpins) {
+      const earliestSpinTime = new Date(recentSpins[0].playedAt).getTime();
+      const remainingMs = Math.max(0, earliestSpinTime + windowMs - Date.now());
+
+      return res.status(429).json({
+        success: false,
+        alreadySpun: true,
+        canSpin: false,
+        spinsUsed,
+        maxSpins,
+        spinsRemaining: 0,
+        remainingMs,
+        nextSpinAvailableAt: new Date(Date.now() + remainingMs),
+        message: `Daily spin limit reached (${spinsUsed}/${maxSpins} spins used). Come back tomorrow!`,
+      });
+    }
+
+    // 5. Select winning slot using backend probability algorithm
+    const outcome = selectWinningSlot(slots);
+    const { winningSlotIndex, winningSlot, roll, isRemainder } = outcome;
+    const coinsWon = Number(winningSlot.coinValue) || 0;
+
+    // 6. Record SpinLog
+    const spinRecord = await SpinLog.create({
+      userId: dbCustomer._id,
+      name: dbCustomer.name || 'Customer',
+      username: dbCustomer.username || 'user',
+      phone: dbCustomer.phone || 'N/A',
+      slotIndex: winningSlotIndex,
+      slotNumber: winningSlot.slotNumber || winningSlotIndex + 1,
+      prizeLabel: winningSlot.label,
+      rewardType: winningSlot.rewardType || 'no_prize',
+      coinValue: coinsWon,
+      couponCode: winningSlot.couponCode || '',
+      clientRequestId: clientRequestId || '',
+      isTestMode: false,
+      playedAt: new Date(),
     });
+
+    // 7. Persist in dbCustomer.spinGame AND dbCustomer.spinAndWin for full compatibility
+    if (!Array.isArray(dbCustomer.spinGame)) {
+      dbCustomer.spinGame = [];
+    }
+    const spinEntry = {
+      slotIndex: winningSlotIndex,
+      slotNumber: winningSlot.slotNumber || winningSlotIndex + 1,
+      prizeLabel: winningSlot.label,
+      rewardType: winningSlot.rewardType || 'no_prize',
+      coinValue: coinsWon,
+      couponCode: winningSlot.couponCode || '',
+      clientRequestId: clientRequestId || '',
+      playedAt: new Date(),
+    };
+    dbCustomer.spinGame.unshift(spinEntry);
+
+    if (!Array.isArray(dbCustomer.spinAndWin)) {
+      dbCustomer.spinAndWin = [];
+    }
+    dbCustomer.spinAndWin.unshift(spinEntry);
+
+    // Record in Customer's unified wallet transaction history
+    if (coinsWon > 0) {
+      if (!Array.isArray(dbCustomer.walletTransactions)) {
+        dbCustomer.walletTransactions = [];
+      }
+      dbCustomer.walletTransactions.unshift({
+        type: 'SPIN_AND_WIN',
+        title: `Spin & Win: ${winningSlot.label}`,
+        prize: winningSlot.label,
+        amount: coinsWon,
+        unit: 'POINTS',
+        description: `Won ${coinsWon} Coins on Lucky Spin Wheel slot #${winningSlot.slotNumber || winningSlotIndex + 1} (${winningSlot.label})`,
+        date: new Date(),
+        referenceId: `spin_${Date.now()}_${winningSlotIndex}`,
+      });
+    }
+
+    dbCustomer.lastSpinAt = new Date();
+    await dbCustomer.save();
+
+    // 8. Calculate updated totals
+    const { availablePoints, availableRupees } = calculateCustomerPoints(dbCustomer);
+
+    const newSpinsUsed = spinsUsed + 1;
+    const newSpinsRemaining = Math.max(0, maxSpins - newSpinsUsed);
 
     return res.status(200).json({
       success: true,
-      totalSpins: count,
-      remainderHits,
-      results,
+      winningSlotIndex,
+      winningSlot: {
+        slotIndex: winningSlotIndex,
+        slotNumber: winningSlot.slotNumber || winningSlotIndex + 1,
+        label: winningSlot.label,
+        subLabel: winningSlot.subLabel || '',
+        rewardType: winningSlot.rewardType || 'no_prize',
+        coinValue: coinsWon,
+        couponCode: winningSlot.couponCode || '',
+        color: winningSlot.color,
+        textColor: winningSlot.textColor,
+        icon: winningSlot.icon,
+        badge: winningSlot.badge || '',
+      },
+      coinsEarned: coinsWon,
+      couponCode: winningSlot.couponCode || '',
+      spinsUsed: newSpinsUsed,
+      maxSpins,
+      spinsRemaining: newSpinsRemaining,
+      newTotalPoints: availablePoints,
+      availableRupees,
+      walletBalance: dbCustomer.walletBalance || 0,
+      spinRecordId: spinRecord._id,
+      rollInfo: { roll, isRemainder },
+      message: `Congratulations! You won ${winningSlot.label}!${coinsWon > 0 ? ` (+${coinsWon} coins credited)` : ''}`,
     });
   } catch (error) {
-    console.error('Simulate spins error:', error);
+    console.error('Execute spin error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Simulation failed',
+      message: error.message || 'Failed to process spin. Please try again.',
       error: error.message,
     });
   }
 };
 
-// @desc    Get All Customer Spin Records for Admin Log
+// @desc    Get All Spin Records (Admin History)
 // @route   GET /api/spin-game/all-scores
 // @access  Admin
-const getAllSpinScores = async (req, res) => {
+const getAllScores = async (req, res) => {
   try {
-    const customers = await Customer.find({ 'spinAndWin.0': { $exists: true } }).select(
-      'name email username phone spinAndWin'
-    );
+    const logs = await SpinLog.find({ isTestMode: { $ne: true } })
+      .sort({ playedAt: -1 })
+      .limit(200);
 
-    let allSpins = [];
-    customers.forEach((cust) => {
-      if (Array.isArray(cust.spinAndWin)) {
-        cust.spinAndWin.forEach((entry) => {
-          allSpins.push({
+    let spins = [];
+    if (logs.length > 0) {
+      spins = logs.map((log) => ({
+        id: log._id,
+        userId: log.userId,
+        name: log.name,
+        username: log.username,
+        phone: log.phone,
+        slotNumber: log.slotNumber,
+        prizeLabel: log.prizeLabel,
+        rewardType: log.rewardType,
+        coinValue: log.coinValue,
+        couponCode: log.couponCode,
+        playedAt: log.playedAt,
+      }));
+    } else {
+      // Fallback: Query Customer documents if no standalone SpinLogs yet
+      const customers = await Customer.find({
+        $or: [{ 'spinGame.0': { $exists: true } }, { 'spinAndWin.0': { $exists: true } }],
+      }).select('name email username phone spinGame spinAndWin');
+
+      customers.forEach((cust) => {
+        const customerSpins = Array.isArray(cust.spinGame) && cust.spinGame.length > 0
+          ? cust.spinGame
+          : cust.spinAndWin || [];
+
+        customerSpins.forEach((entry) => {
+          spins.push({
             id: entry._id || `spin-${cust._id}-${Math.random()}`,
             userId: cust._id,
             name: cust.name,
@@ -660,15 +626,15 @@ const getAllSpinScores = async (req, res) => {
             playedAt: entry.playedAt,
           });
         });
-      }
-    });
+      });
 
-    allSpins.sort((a, b) => new Date(b.playedAt).getTime() - new Date(a.playedAt).getTime());
+      spins.sort((a, b) => new Date(b.playedAt).getTime() - new Date(a.playedAt).getTime());
+    }
 
     return res.status(200).json({
       success: true,
-      count: allSpins.length,
-      spins: allSpins,
+      count: spins.length,
+      spins,
     });
   } catch (error) {
     console.error('Get all spin scores error:', error);
@@ -680,12 +646,74 @@ const getAllSpinScores = async (req, res) => {
   }
 };
 
+// @desc    Simulate Monte Carlo Spins
+// @route   POST /api/spin-game/simulate
+// @access  Admin / Public
+const simulateSpins = async (req, res) => {
+  try {
+    const { count = 1000, slots: customSlots } = req.body;
+    const spinCount = Math.min(50000, Math.max(10, Number(count) || 1000));
+
+    let slots = customSlots;
+    if (!Array.isArray(slots) || slots.length !== 8) {
+      const settingsDoc = await SpinGame.findOne();
+      slots =
+        settingsDoc && Array.isArray(settingsDoc.slots) && settingsDoc.slots.length === 8
+          ? settingsDoc.slots
+          : DEFAULT_SPIN_SLOTS;
+    }
+
+    const tallies = slots.map((s, idx) => ({
+      slotIndex: idx,
+      slotNumber: s.slotNumber || idx + 1,
+      label: s.label,
+      rewardType: s.rewardType,
+      configuredProbability: Number(s.probability) || 0,
+      coinValue: Number(s.coinValue) || 0,
+      wins: 0,
+    }));
+
+    let remainderHits = 0;
+
+    for (let i = 0; i < spinCount; i++) {
+      const { winningSlotIndex, isRemainder } = selectWinningSlot(slots);
+      tallies[winningSlotIndex].wins++;
+      if (isRemainder) remainderHits++;
+    }
+
+    const results = tallies.map((t) => {
+      const empiricalPercentage = Math.round((t.wins / spinCount) * 10000) / 100;
+      const difference = Math.round((empiricalPercentage - t.configuredProbability) * 100) / 100;
+      return {
+        ...t,
+        empiricalPercentage,
+        difference,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      totalSpins: spinCount,
+      remainderHits,
+      results,
+    });
+  } catch (error) {
+    console.error('Simulate spins error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to run spin simulation',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getSettings,
   saveSettings,
-  executeSpin,
   getSpinStatus,
+  executeSpin,
+  getAllScores,
+  getAllSpinScores: getAllScores,
   simulateSpins,
-  getAllSpinScores,
   DEFAULT_SPIN_SLOTS,
 };

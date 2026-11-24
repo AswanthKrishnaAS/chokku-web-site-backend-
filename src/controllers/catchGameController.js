@@ -1,6 +1,23 @@
 const CatchGame = require('../models/CatchGame');
 const Customer = require('../models/Customer');
 
+// Helper to resolve customer from req
+const resolveCustomer = async (req) => {
+  if (req.customer) {
+    return req.customer;
+  }
+  const userId = req.headers['x-user-id'] || req.query.userId;
+  if (userId) {
+    try {
+      const cust = await Customer.findById(userId).select('-password');
+      if (cust) return cust;
+    } catch (e) {
+      // invalid ObjectId
+    }
+  }
+  return null;
+};
+
 // @desc    Get Catch Game Settings
 // @route   GET /api/catch-game/settings
 // @access  Public
@@ -23,6 +40,7 @@ const getSettings = async (req, res) => {
         settings: {
           giftCount: 5,
           giftBoxCount: 5,
+          dailyPlayLimit: 1,
           coinCount: 10,
           pointsPerCoin: 10,
           bombCount: 3,
@@ -69,6 +87,7 @@ const createSettings = async (req, res) => {
     const {
       giftCount = 5,
       giftBoxCount = 5,
+      dailyPlayLimit = 1,
       coinCount = 10,
       pointsPerCoin = 10,
       bombCount = 3,
@@ -85,6 +104,7 @@ const createSettings = async (req, res) => {
     const newSettings = await CatchGame.create({
       giftCount: countToUse,
       giftBoxCount: countToUse,
+      dailyPlayLimit: Math.max(1, Number(dailyPlayLimit) || 1),
       coinCount: Number(coinCount),
       pointsPerCoin: Number(pointsPerCoin),
       bombCount: Number(bombCount),
@@ -130,7 +150,7 @@ const updateSettings = async (req, res) => {
         settings.giftBoxCount = Number(req.body.giftCount);
       }
 
-      ['coinCount', 'pointsPerCoin', 'bombCount', 'pointsLossPerBomb', 'gameDuration', 'giftSpeed', 'coinSpeed', 'bombSpeed'].forEach((field) => {
+      ['coinCount', 'pointsPerCoin', 'bombCount', 'pointsLossPerBomb', 'gameDuration', 'giftSpeed', 'coinSpeed', 'bombSpeed', 'dailyPlayLimit'].forEach((field) => {
         if (req.body[field] !== undefined) {
           settings[field] = Number(req.body[field]);
         }
@@ -161,6 +181,73 @@ const updateSettings = async (req, res) => {
   }
 };
 
+// @desc    Get User Catch Game Status & Remaining Plays (24h period)
+// @route   GET /api/catch-game/status
+// @access  Public (Optional auth)
+const getGameStatus = async (req, res) => {
+  try {
+    const customer = await resolveCustomer(req);
+
+    let settings = await CatchGame.findOne();
+    const maxPlays = settings && typeof settings.dailyPlayLimit === 'number' && settings.dailyPlayLimit > 0
+      ? settings.dailyPlayLimit
+      : 1;
+
+    if (!customer) {
+      return res.status(200).json({
+        success: true,
+        canPlay: true,
+        playsUsed: 0,
+        maxPlays,
+        playsRemaining: maxPlays,
+        remainingMs: 0,
+        lastPlayedAt: null,
+      });
+    }
+
+    const dbCustomer = await Customer.findById(customer._id);
+    const windowMs = 24 * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - windowMs);
+
+    const recentPlays = (dbCustomer && Array.isArray(dbCustomer.catchTheGift))
+      ? dbCustomer.catchTheGift
+          .filter((entry) => entry.playedAt && new Date(entry.playedAt) >= cutoff)
+          .sort((a, b) => new Date(a.playedAt).getTime() - new Date(b.playedAt).getTime())
+      : [];
+
+    const playsUsed = recentPlays.length;
+    const playsRemaining = Math.max(0, maxPlays - playsUsed);
+    const canPlay = playsRemaining > 0;
+
+    let remainingMs = 0;
+    if (!canPlay && recentPlays.length > 0) {
+      const earliestPlayTime = new Date(recentPlays[0].playedAt).getTime();
+      remainingMs = Math.max(0, earliestPlayTime + windowMs - Date.now());
+    }
+
+    const lastPlayedAt = recentPlays.length > 0
+      ? recentPlays[recentPlays.length - 1].playedAt
+      : null;
+
+    return res.status(200).json({
+      success: true,
+      canPlay,
+      playsUsed,
+      maxPlays,
+      playsRemaining,
+      remainingMs,
+      lastPlayedAt,
+    });
+  } catch (error) {
+    console.error('Get catch game status error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to check game status',
+      error: error.message,
+    });
+  }
+};
+
 // @desc    Submit & Save Customer Game Score and Assign Unopened Gifts
 // @route   POST /api/catch-game/score
 // @access  Private (Authenticated Customer)
@@ -180,9 +267,52 @@ const submitScore = async (req, res) => {
       coinsCollected = 0,
       specialGiftsCollected = 0,
       bombsHit = 0,
+      usedReplayTicket = false,
     } = req.body;
 
     const giftsCount = Number(giftsCollected) || 0;
+
+    const dbCustomer = await Customer.findById(customer._id);
+    if (!dbCustomer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer account not found in database',
+      });
+    }
+
+    // Fetch Game Settings to get configured per-box rewards and dailyPlayLimit
+    const gameSettings = await CatchGame.findOne();
+    const maxPlays = (gameSettings && typeof gameSettings.dailyPlayLimit === 'number' && gameSettings.dailyPlayLimit > 0)
+      ? gameSettings.dailyPlayLimit
+      : 1;
+
+    const windowMs = 24 * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - windowMs);
+
+    const recentPlays = (dbCustomer && Array.isArray(dbCustomer.catchTheGift))
+      ? dbCustomer.catchTheGift
+          .filter((entry) => entry.playedAt && new Date(entry.playedAt) >= cutoff)
+          .sort((a, b) => new Date(a.playedAt).getTime() - new Date(b.playedAt).getTime())
+      : [];
+
+    const playsUsed = recentPlays.length;
+
+    // Check 24-hour limit unless user redeemed an ad replay ticket
+    if (playsUsed >= maxPlays && !usedReplayTicket) {
+      const earliestPlayTime = new Date(recentPlays[0].playedAt).getTime();
+      const remainingMs = Math.max(0, earliestPlayTime + windowMs - Date.now());
+
+      return res.status(429).json({
+        success: false,
+        dailyLimitReached: true,
+        canPlay: false,
+        playsUsed,
+        maxPlays,
+        playsRemaining: 0,
+        remainingMs,
+        message: `Daily play limit reached (${playsUsed}/${maxPlays} plays used within 24 hours). Come back later or watch a video!`,
+      });
+    }
 
     const newScoreEntry = {
       score: Number(score),
@@ -193,21 +323,14 @@ const submitScore = async (req, res) => {
       playedAt: new Date(),
     };
 
-    const dbCustomer = await Customer.findById(customer._id);
-    if (!dbCustomer) {
-      return res.status(404).json({
-        success: false,
-        message: 'Customer account not found in database',
-      });
-    }
-
     if (!Array.isArray(dbCustomer.catchTheGift)) {
       dbCustomer.catchTheGift = [];
     }
     dbCustomer.catchTheGift.unshift(newScoreEntry);
 
-    // Fetch Game Settings to get configured per-box rewards
-    const gameSettings = await CatchGame.findOne();
+    const newPlaysUsed = playsUsed + 1;
+    const newPlaysRemaining = Math.max(0, maxPlays - newPlaysUsed);
+
     const configuredBoxes = (gameSettings && Array.isArray(gameSettings.giftBoxes) && gameSettings.giftBoxes.length > 0)
       ? gameSettings.giftBoxes
       : [
@@ -259,6 +382,9 @@ const submitScore = async (req, res) => {
       scoreEntry: newScoreEntry,
       newGifts: newlyEarnedGifts,
       unopenedGiftsCount: dbCustomer.myGifts.filter(g => !g.isOpened).length,
+      playsUsed: newPlaysUsed,
+      maxPlays,
+      playsRemaining: newPlaysRemaining,
     });
   } catch (error) {
     console.error('Submit customer score error:', error);
@@ -331,7 +457,7 @@ const getMyPoints = async (req, res) => {
     }
 
     const dbCustomer = await Customer.findById(customer._id).select(
-      'name email phone catchTheGift spinAndWin pointConversions walletBalance walletTransactions'
+      'name email phone catchTheGift spinGame spinAndWin carromGame pointConversions walletBalance walletTransactions'
     );
     if (!dbCustomer) {
       return res.status(404).json({
@@ -354,17 +480,35 @@ const getMyPoints = async (req, res) => {
     }
 
     let totalSpinCoins = 0;
+    const seenSpinKeys = new Set();
+    const countSpinCoin = (entry) => {
+      const key = entry._id ? String(entry._id) : (entry.clientRequestId || `${entry.playedAt}_${entry.slotIndex}`);
+      if (seenSpinKeys.has(key)) return;
+      seenSpinKeys.add(key);
+      const coinVal = Number(entry.coinValue) || 0;
+      totalSpinCoins += coinVal;
+      if (coinVal > highestScore) {
+        highestScore = coinVal;
+      }
+    };
+    if (Array.isArray(dbCustomer.spinGame)) {
+      dbCustomer.spinGame.forEach(countSpinCoin);
+    }
     if (Array.isArray(dbCustomer.spinAndWin)) {
-      dbCustomer.spinAndWin.forEach((entry) => {
-        const coinVal = Number(entry.coinValue) || 0;
-        totalSpinCoins += coinVal;
-        if (coinVal > highestScore) {
-          highestScore = coinVal;
-        }
+      dbCustomer.spinAndWin.forEach(countSpinCoin);
+    }
+
+    let totalCarromPoints = 0;
+    if (Array.isArray(dbCustomer.carromGame)) {
+      dbCustomer.carromGame.forEach((entry) => {
+        const val = typeof entry.netPoints === 'number' && entry.netPoints !== 0
+          ? entry.netPoints
+          : (Number(entry.score) || 0);
+        totalCarromPoints += val;
       });
     }
 
-    const totalPointsEarned = totalCatchPoints + totalSpinCoins;
+    const totalPointsEarned = Math.max(0, totalCatchPoints + totalSpinCoins + totalCarromPoints);
 
     let totalPointsConverted = 0;
     if (Array.isArray(dbCustomer.pointConversions)) {
@@ -376,8 +520,7 @@ const getMyPoints = async (req, res) => {
     const availablePoints = Math.max(0, totalPointsEarned - totalPointsConverted);
     const availableRupees = Math.floor(availablePoints / 1000);
 
-    // Build consolidated wallet and points transaction history
-    let unifiedTransactions = [];
+    const unifiedTransactions = [];
 
     // 1. Explicit walletTransactions recorded on Customer document
     if (Array.isArray(dbCustomer.walletTransactions)) {
@@ -396,39 +539,42 @@ const getMyPoints = async (req, res) => {
       });
     }
 
-    // 2. Synthesize transactions for any spinAndWin coin wins not yet in walletTransactions
-    if (Array.isArray(dbCustomer.spinAndWin)) {
-      dbCustomer.spinAndWin.forEach((spin) => {
-        const coins = Number(spin.coinValue) || 0;
-        if (coins > 0) {
-          const ref = `spin_${new Date(spin.playedAt).getTime()}`;
-          const alreadyLogged = unifiedTransactions.some(
-            (t) => t.type === 'SPIN_AND_WIN' && Math.abs(new Date(t.date).getTime() - new Date(spin.playedAt).getTime()) < 2000
-          );
-          if (!alreadyLogged) {
-            unifiedTransactions.push({
-              id: spin._id ? String(spin._id) : `spin-tx-${Math.random()}`,
-              type: 'SPIN_AND_WIN',
-              title: `Spin & Win: ${spin.prizeLabel || 'Coins'}`,
-              prize: spin.prizeLabel || 'Coins',
-              amount: coins,
-              unit: 'POINTS',
-              description: `Won ${coins} Coins in Lucky Spin & Win (${spin.prizeLabel})`,
-              date: spin.playedAt,
-              status: 'COMPLETED',
-            });
-          }
+    // 2. Synthesize transactions for Spin & Win coin wins not already in walletTransactions
+    const allSpins = [
+      ...(Array.isArray(dbCustomer.spinGame) ? dbCustomer.spinGame : []),
+      ...(Array.isArray(dbCustomer.spinAndWin) ? dbCustomer.spinAndWin : []),
+    ];
+    allSpins.forEach((spin) => {
+      const coins = Number(spin.coinValue) || 0;
+      if (coins > 0) {
+        const spinTime = new Date(spin.playedAt).getTime();
+        const alreadyLogged = unifiedTransactions.some(
+          (t) => t.type === 'SPIN_AND_WIN' && Math.abs(new Date(t.date).getTime() - spinTime) < 3000
+        );
+        if (!alreadyLogged) {
+          unifiedTransactions.push({
+            id: spin._id ? String(spin._id) : `spin-tx-${Math.random()}`,
+            type: 'SPIN_AND_WIN',
+            title: `Spin & Win: ${spin.prizeLabel || 'Coins'}`,
+            prize: spin.prizeLabel || 'Coins',
+            amount: coins,
+            unit: 'POINTS',
+            description: `Won ${coins} Coins in Lucky Spin & Win (${spin.prizeLabel || 'Coins'})`,
+            date: spin.playedAt,
+            status: 'COMPLETED',
+          });
         }
-      });
-    }
+      }
+    });
 
     // 3. Synthesize Catch the Gift games
     if (Array.isArray(dbCustomer.catchTheGift)) {
       dbCustomer.catchTheGift.forEach((game) => {
         const score = Number(game.score) || 0;
         if (score > 0) {
+          const gameTime = new Date(game.playedAt).getTime();
           const alreadyLogged = unifiedTransactions.some(
-            (t) => t.type === 'CATCH_THE_GIFT' && Math.abs(new Date(t.date).getTime() - new Date(game.playedAt).getTime()) < 2000
+            (t) => t.type === 'CATCH_THE_GIFT' && Math.abs(new Date(t.date).getTime() - gameTime) < 3000
           );
           if (!alreadyLogged) {
             unifiedTransactions.push({
@@ -447,11 +593,61 @@ const getMyPoints = async (req, res) => {
       });
     }
 
-    // 4. Synthesize point conversions
+    // 4. Synthesize Carrom match games
+    if (Array.isArray(dbCustomer.carromGame)) {
+      dbCustomer.carromGame.forEach((entry) => {
+        const matchTime = new Date(entry.playedAt).getTime();
+        const alreadyLogged = unifiedTransactions.some(
+          (t) => t.type === 'CARROM_GAME' && Math.abs(new Date(t.date).getTime() - matchTime) < 3000
+        );
+        if (!alreadyLogged) {
+          if (entry.result === 'WON') {
+            unifiedTransactions.push({
+              id: entry._id ? String(entry._id) : `tx-carrom-${entry.playedAt}`,
+              type: 'CARROM_GAME',
+              title: 'Carroms Match Won! 🏆',
+              prize: `${entry.pointsAwarded || entry.netPoints || entry.score || 0} Points`,
+              amount: entry.pointsAwarded || entry.netPoints || entry.score || 0,
+              unit: 'POINTS',
+              description: `Won vs ${entry.opponentName || 'Opponent'} (+${entry.pointsAwarded || entry.netPoints} pts)`,
+              date: entry.playedAt,
+              status: 'COMPLETED',
+            });
+          } else if (entry.result === 'LOST' || entry.result === 'FORFEIT') {
+            unifiedTransactions.push({
+              id: entry._id ? String(entry._id) : `tx-carrom-${entry.playedAt}`,
+              type: 'CARROM_GAME',
+              title: 'Carroms Match Entry Fee',
+              prize: 'Points Entry Fee',
+              amount: -(entry.entryFee || Math.abs(entry.netPoints) || 0),
+              unit: 'POINTS',
+              description: `Match vs ${entry.opponentName || 'Opponent'} (-${entry.entryFee || Math.abs(entry.netPoints)} pts)`,
+              date: entry.playedAt,
+              status: 'DEDUCTED',
+            });
+          } else if (entry.score > 0) {
+            unifiedTransactions.push({
+              id: entry._id ? String(entry._id) : `tx-carrom-${entry.playedAt}`,
+              type: 'CARROM_GAME',
+              title: 'Carroms Board Reward',
+              prize: `${entry.score} Points`,
+              amount: Number(entry.score) || 0,
+              unit: 'POINTS',
+              description: `Scored ${entry.score} points (${entry.coinsPocketed || 0} coins pocketed${entry.queenPocketed ? ', Queen claimed!' : ''})`,
+              date: entry.playedAt,
+              status: 'COMPLETED',
+            });
+          }
+        }
+      });
+    }
+
+    // 5. Synthesize point conversions
     if (Array.isArray(dbCustomer.pointConversions)) {
       dbCustomer.pointConversions.forEach((conv) => {
+        const convTime = new Date(conv.convertedAt).getTime();
         const alreadyLogged = unifiedTransactions.some(
-          (t) => t.type === 'CONVERSION' && Math.abs(new Date(t.date).getTime() - new Date(conv.convertedAt).getTime()) < 2000
+          (t) => t.type === 'CONVERSION' && Math.abs(new Date(t.date).getTime() - convTime) < 3000
         );
         if (!alreadyLogged) {
           unifiedTransactions.push({
@@ -473,18 +669,23 @@ const getMyPoints = async (req, res) => {
     // Sort newest first
     unifiedTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+    const totalGamesPlayed =
+      (Array.isArray(dbCustomer.catchTheGift) ? dbCustomer.catchTheGift.length : 0) +
+      (Array.isArray(dbCustomer.spinGame) ? dbCustomer.spinGame.length : 0) +
+      (Array.isArray(dbCustomer.spinAndWin) ? dbCustomer.spinAndWin.length : 0) +
+      (Array.isArray(dbCustomer.carromGame) ? dbCustomer.carromGame.length : 0);
+
     return res.status(200).json({
       success: true,
       totalPoints: availablePoints,
       totalPointsEarned,
+      totalCatchPoints,
+      totalSpinCoins,
+      totalCarromPoints,
       totalPointsConverted,
       availableRupees,
       highestScore,
-      totalCatchPoints,
-      totalSpinCoins,
-      totalGamesPlayed:
-        (dbCustomer.catchTheGift ? dbCustomer.catchTheGift.length : 0) +
-        (dbCustomer.spinAndWin ? dbCustomer.spinAndWin.length : 0),
+      totalGamesPlayed,
       walletBalance: dbCustomer.walletBalance || 0,
       conversions: dbCustomer.pointConversions || [],
       transactions: unifiedTransactions,
@@ -521,18 +722,35 @@ const convertPoints = async (req, res) => {
       });
     }
 
-    // 1. Calculate Total Earned Points (Catch the Gift + Spin and Win)
+    // 1. Calculate Total Earned Points (Catch the Gift + Spin & Win + Carrom)
     let totalPointsEarned = 0;
     if (Array.isArray(dbCustomer.catchTheGift)) {
       dbCustomer.catchTheGift.forEach((entry) => {
         totalPointsEarned += Number(entry.score) || 0;
       });
     }
+    const countedSpinIds = new Set();
+    const addSpinCoins = (entry) => {
+      const key = entry._id ? String(entry._id) : (entry.clientRequestId || `${entry.playedAt}_${entry.slotIndex}`);
+      if (countedSpinIds.has(key)) return;
+      countedSpinIds.add(key);
+      totalPointsEarned += Number(entry.coinValue) || 0;
+    };
+    if (Array.isArray(dbCustomer.spinGame)) {
+      dbCustomer.spinGame.forEach(addSpinCoins);
+    }
     if (Array.isArray(dbCustomer.spinAndWin)) {
-      dbCustomer.spinAndWin.forEach((entry) => {
-        totalPointsEarned += Number(entry.coinValue) || 0;
+      dbCustomer.spinAndWin.forEach(addSpinCoins);
+    }
+    if (Array.isArray(dbCustomer.carromGame)) {
+      dbCustomer.carromGame.forEach((entry) => {
+        const val = typeof entry.netPoints === 'number' && entry.netPoints !== 0
+          ? entry.netPoints
+          : (Number(entry.score) || 0);
+        totalPointsEarned += val;
       });
     }
+    totalPointsEarned = Math.max(0, totalPointsEarned);
 
     // 2. Calculate Total Converted Points
     let totalPointsConverted = 0;
@@ -736,6 +954,7 @@ module.exports = {
   getSettings,
   createSettings,
   updateSettings,
+  getGameStatus,
   submitScore,
   getAllScores,
   getMyPoints,

@@ -243,6 +243,18 @@ const registerUser = async (req, res) => {
       username: userUsername || userEmail,
       password,
       role: 'customer',
+      spinGame: [
+        {
+          slotIndex: 0,
+          slotNumber: 1,
+          prizeLabel: 'Welcome Bonus 100 Coins',
+          rewardType: 'coins',
+          coinValue: 100,
+          couponCode: 'WELCOME100',
+          clientRequestId: `signup-bonus-${Date.now()}`,
+          playedAt: new Date(),
+        },
+      ],
     });
 
     if (customer) {

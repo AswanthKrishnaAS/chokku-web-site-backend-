@@ -15,8 +15,12 @@ const productRoutes = require('./routes/productRoutes');
 const tryOnRoutes = require('./routes/tryOnRoutes');
 const catchGameRoutes = require('./routes/catchGameRoutes');
 const spinGameRoutes = require('./routes/spinGameRoutes');
+const carromGameRoutes = require('./routes/carromGameRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const homepageSliderRoutes = require('./routes/homepageSliderRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
+const visitorTracker = require('./services/visitorTracker');
+const carromSocketManager = require('./services/carromSocketManager');
 const http = require('http');
 const { Server } = require('socket.io');
 const seedDefaultUser = require('./utils/seed');
@@ -34,6 +38,8 @@ const io = new Server(server, {
 // Real-time socket connection handler
 io.on('connection', (socket) => {
   console.log('⚡ Client connected to socket:', socket.id);
+  visitorTracker.handleConnection(socket);
+  carromSocketManager.handleConnection(socket);
 
   // Relay order notifications to admin
   socket.on('new_order', (order) => {
@@ -60,6 +66,8 @@ io.on('connection', (socket) => {
 });
 
 app.set('io', io);
+visitorTracker.setIO(io);
+carromSocketManager.setIO(io);
 
 // Security Headers Middleware (Disable strict CSP for API to avoid blocking Razorpay, external CDN resources, and extensions)
 app.use(helmet({
@@ -78,7 +86,7 @@ app.use((req, res, next) => {
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'Accept', 'Origin'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'x-admin-id', 'x-visitor-id', 'x-session-id', 'Accept', 'Origin'],
   credentials: true,
 }));
 app.options('*', cors());
@@ -98,7 +106,9 @@ app.use('/api/products', productRoutes);
 app.use('/api/try-on', tryOnRoutes);
 app.use('/api/catch-game', catchGameRoutes);
 app.use('/api/spin-game', spinGameRoutes);
+app.use('/api/carrom-game', carromGameRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/analytics', analyticsRoutes);
 app.use('/api', authRoutes);
 
 // Non-/api route aliases to guarantee requests without /api prefix work cleanly
@@ -111,7 +121,9 @@ app.use('/products', productRoutes);
 app.use('/try-on', tryOnRoutes);
 app.use('/catch-game', catchGameRoutes);
 app.use('/spin-game', spinGameRoutes);
+app.use('/carrom-game', carromGameRoutes);
 app.use('/orders', orderRoutes);
+app.use('/analytics', analyticsRoutes);
 
 // Root endpoint & Health check endpoints
 app.get(['/', '/api'], (req, res) => {
@@ -126,6 +138,7 @@ app.get(['/', '/api'], (req, res) => {
       categories: '/api/categories',
       homepageSliders: '/api/homepage-sliders',
       websiteSettings: '/api/website-settings',
+      analytics: '/api/analytics/dashboard',
       meeshoDetails: '/api/products/fetch-meesho-details',
       meeshoReviews: '/api/products/fetch-meesho-reviews',
     },

@@ -83,6 +83,34 @@ const customerSchema = new mongoose.Schema(
         playedAt: { type: Date, default: Date.now }
       }
     ],
+    spinGame: [
+      {
+        slotIndex: { type: Number, required: true },
+        slotNumber: { type: Number, required: true },
+        prizeLabel: { type: String, required: true },
+        rewardType: { type: String, default: 'no_prize' },
+        coinValue: { type: Number, default: 0 },
+        couponCode: { type: String, default: '' },
+        clientRequestId: { type: String, default: '' },
+        playedAt: { type: Date, default: Date.now },
+      }
+    ],
+    carromGame: [
+      {
+        matchId: { type: String, default: '' },
+        entryFee: { type: Number, default: 0 },
+        result: { type: String, enum: ['WON', 'LOST', 'FORFEIT', 'PRACTICE'], default: 'PRACTICE' },
+        pointsAwarded: { type: Number, default: 0 },
+        netPoints: { type: Number, default: 0 },
+        score: { type: Number, default: 0 },
+        opponentName: { type: String, default: 'AI Bot' },
+        gameMode: { type: String, enum: ['MULTIPLAYER', 'AI', 'PRACTICE'], default: 'AI' },
+        coinsPocketed: { type: Number, default: 0 },
+        queenPocketed: { type: Boolean, default: false },
+        strikesUsed: { type: Number, default: 0 },
+        playedAt: { type: Date, default: Date.now },
+      }
+    ],
     spinAndWin: [
       {
         slotIndex: { type: Number },
