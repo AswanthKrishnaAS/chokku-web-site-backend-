@@ -4,7 +4,7 @@ const helmet = require('helmet');
 const dotenv = require('dotenv');
 const path = require('path');
 
-// Load environment variables from .env file
+
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const connectDB = require('./config/db');
@@ -69,9 +69,11 @@ app.set('io', io);
 visitorTracker.setIO(io);
 carromSocketManager.setIO(io);
 
-// Security Headers Middleware
+// Security Headers Middleware (Disable strict CSP for API to avoid blocking Razorpay, external CDN resources, and extensions)
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false,
 }));
 
 // Attach io instance to every express request
