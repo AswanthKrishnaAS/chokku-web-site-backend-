@@ -58,6 +58,12 @@ const catchGameSchema = new mongoose.Schema(
       type: Number,
       default: 5,
     },
+    dailyPlayLimit: {
+      type: Number,
+      required: true,
+      default: 1,
+      min: 1,
+    },
     coinCount: {
       type: Number,
       default: 10,
