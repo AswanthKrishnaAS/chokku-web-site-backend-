@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 
+
 const adminFcmTokenSchema = new mongoose.Schema(
   {
     token: {
